@@ -330,11 +330,14 @@ int main(int argc, char *argv[])
       int i = 0;
       for (const auto &f : filesystem::directory_iterator(path))
       {
-         fn = f.path();
-         pool.push_task([i, fn]
+	if (f.is_directory())  // Check if the entry is a directory
+	  {
+	    fn = f.path();
+	    pool.push_task([i, fn]
                         { dedup_chunk(fn); });
-         cout << "Deduping " << fn << endl;
-         i++;
+	    cout << "Deduping " << fn << endl;
+	    i++;
+	  }
       }
 
       pool.wait_for_tasks();

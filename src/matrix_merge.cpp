@@ -93,8 +93,9 @@ void merge_chunk(const uint file_index, const uint min_occur, string input_path,
     // size_t num_accessions = accessions.size();
     std::cout << "Number of accessions: " << NUM_ACC << std::endl;
     ofstream m_stream("matrix_acc"+to_string(NUM_ACC)+"_"+to_string(min_occur)+"/" + to_string(file_index) + "_matrix.tsv");
-    ofstream ck_stream("matrix_acc"+to_string(NUM_ACC)+"_"+to_string(min_occur)+"/" + to_string(file_index) + "_discard.txt");
+    ofstream ck_stream("matrix_acc"+to_string(NUM_ACC)+"_"+to_string(min_occur)+"/" + to_string(file_index) + "_core.txt");
     for (auto & pair_ : matrix_) {
+      // check if a k-mer occurs in all accessions and therefore is flagged as core k-mer
     if (pair_.second[NUM_ACC] == NUM_ACC ){
         // std::cout << "kmer: " << pair_.first << std::endl;
         ck_stream << pair_.first << "\n";
