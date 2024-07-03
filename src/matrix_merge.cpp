@@ -21,6 +21,7 @@
 
 
 using namespace std;
+
 // const size_t NUM_ACC = 100;
 vector<string> split(const string &str, const char &sep)
 {
@@ -32,7 +33,7 @@ vector<string> split(const string &str, const char &sep)
     return ret;
 }
 
-vector<string> get_accessions(string accessions_path)
+/*vector<string> get_accessions(string accessions_path)
 {
         vector<string> accessions;
 	cout << "accessions path: " << accessions_path << endl;
@@ -43,11 +44,40 @@ vector<string> get_accessions(string accessions_path)
         	    accessions.push_back(line);
         	stream.close();
 	}
-        catch (exception const &e)
+    catch (exception const &e)
         	{cout << e.what() << endl;}
+        	
 	if (accessions.size() == 0) 
 		cout << "could not read accessions, make sure file is not empty." << endl;
 	return accessions;
+}*/
+
+vector<string> get_accessions(const string& accessions_path) {
+    vector<string> accessions;
+    cout << "Accessions path: " << accessions_path << endl;
+
+    try {
+        ifstream stream(accessions_path);
+        if (!stream) {
+            throw runtime_error("Failed to open accessions file: " + accessions_path);
+        }
+
+        string line;
+        while (getline(stream, line)) {
+            accessions.push_back(line);
+        }
+
+        stream.close();
+    } catch (const exception& e) {
+        cerr << e.what() << endl;
+        throw;
+    }
+
+    if (accessions.empty()) {
+        throw runtime_error("Could not read accessions. Make sure the file is not empty.");
+    }
+
+    return accessions;
 }
 
 void merge_chunk(const uint file_index, const uint min_occur, string input_path, string accessions_path, string delimiter, bool show_count, string ouput_dir)
@@ -62,8 +92,26 @@ void merge_chunk(const uint file_index, const uint min_occur, string input_path,
     for (auto &acc : accessions)
     {
         string file_path = input_path + acc + "/" + to_string(file_index) + "_nr.tsv";
-	if (!filesystem::exists(file_path)) {cout << "file: " << file_path << " doe not exist!" << endl;}
+	    /*if (!filesystem::exists(file_path)) {cout << "file: " << file_path << " doe not exist!" << endl;}*/
+	    if (!filesystem::exists(file_path)) {
+            throw runtime_error("File: " + file_path + " does not exist!");
+        }
+        
+     }
+
+    for (auto &acc : accessions)
+    {
+        string file_path = input_path + acc + "/" + to_string(file_index) + "_nr.tsv";
+	    /*if (!filesystem::exists(file_path)) {cout << "file: " << file_path << " doe not exist!" << endl;}*/
+	    /*if (!filesystem::exists(file_path)) {
+            throw runtime_error("File: " + file_path + " does not exist!");
+        }*/
+	
         ifstream stream(file_path);
+        if (!stream) {
+            throw runtime_error("Failed to open file: " + file_path);
+        }
+        
         string line;
         while (getline(stream, line))
         {
@@ -287,7 +335,9 @@ int main(int argc, char *argv[])
 
     catch (exception const &e)
     {
-        cout << e.what() << endl;
+        cerr << e.what() << endl;
+        return EXIT_FAILURE; // This ensures a non-zero exit code
     }
+    return EXIT_SUCCESS; // This ensures a zero exit code for success
 }
 
