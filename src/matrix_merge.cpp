@@ -89,6 +89,9 @@ void merge_chunk(const uint file_index, const uint min_occur, string input_path,
     // unordered_map<string, ushort[NUM_ACC+1]> matrix_;
     size_t acc_index = 0;	
 
+    /*  - CHECK THAT ALL BINS EXIST BEFORE COMMITING TO ANY FILE READING
+        - EXIT WITH SYSTEM ERROR IF ANY OF THE FILES DO NOT EXIT
+    */
     for (auto &acc : accessions)
     {
         string file_path = input_path + acc + "/" + to_string(file_index) + "_nr.tsv";
@@ -102,6 +105,7 @@ void merge_chunk(const uint file_index, const uint min_occur, string input_path,
     for (auto &acc : accessions)
     {
         string file_path = input_path + acc + "/" + to_string(file_index) + "_nr.tsv";
+        
 	    /*if (!filesystem::exists(file_path)) {cout << "file: " << file_path << " doe not exist!" << endl;}*/
 	    /*if (!filesystem::exists(file_path)) {
             throw runtime_error("File: " + file_path + " does not exist!");
