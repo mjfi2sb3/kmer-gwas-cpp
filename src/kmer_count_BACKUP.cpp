@@ -20,7 +20,7 @@
 
 using namespace std;
 
-const size_t NUM_CHUNKS = 50000;
+const size_t NUM_CHUNKS = 200000;
 const int k = 51;
 
 const map<char, string> bits = {
@@ -330,14 +330,11 @@ int main(int argc, char *argv[])
       int i = 0;
       for (const auto &f : filesystem::directory_iterator(path))
       {
-	if (f.is_directory())  // Check if the entry is a directory
-	  {
-	    fn = f.path();
-	    pool.push_task([i, fn]
+         fn = f.path();
+         pool.push_task([i, fn]
                         { dedup_chunk(fn); });
-	    cout << "Deduping " << fn << endl;
-	    i++;
-	  }
+         cout << "Deduping " << fn << endl;
+         i++;
       }
 
       pool.wait_for_tasks();

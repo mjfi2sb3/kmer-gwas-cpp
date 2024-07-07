@@ -20,7 +20,7 @@
 
 using namespace std;
 
-const size_t NUM_CHUNKS = 200000;
+const size_t NUM_CHUNKS = 100;
 const int k = 51;
 
 const map<char, string> bits = {

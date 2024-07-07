@@ -20,7 +20,6 @@
 
 using namespace std;
 
-const size_t NUM_CHUNKS = 50000;
 const int k = 51;
 
 const map<char, string> bits = {
@@ -171,7 +170,7 @@ public:
       {
          auto key = pair_.first;
          auto value = pair_.second;
-	 auto key_hash = bitset<2*k>(key.to_string().substr(0,64)).to_ulong();
+         auto key_hash = bitset<2*k>(key.to_string().substr(0,64)).to_ulong();
          auto idx = key_hash % num_files;
          lock_guard lock(my_mutex[idx]);
          key_streams[idx].write(reinterpret_cast<char*>(&key), sizeof(key));
@@ -192,40 +191,40 @@ vector<string> split(const string &str, const char &sep)
 
 void dedup_chunk(const string file_path)
 {
-	string keys_path = file_path + "/keys.dat";
-	string values_path = file_path + "/values.dat";	
-	
-	ifstream keys_f(keys_path, ios::in | ios::binary);
-	ifstream values_f(values_path, ios::in | ios::binary);
-		
-	keys_f.seekg(0, keys_f.end);
-	auto kN = keys_f.tellg();              
-	keys_f.seekg(0, keys_f.beg);
-	
-	values_f.seekg(0, values_f.end);
-	auto vN = values_f.tellg();              
-	values_f.seekg(0, values_f.beg);
-	
-	vector<bitset<2*k>> keys(kN / sizeof(bitset<2*k>));
-	vector<ushort> values(vN / sizeof(ushort));
-	
-	keys_f.read(reinterpret_cast<char*>(keys.data()), keys.size()*sizeof(bitset<2*k>));
-	values_f.read(reinterpret_cast<char*>(values.data()), values.size()*sizeof(ushort));
-	
-	keys_f.close();
-	values_f.close();
+   string keys_path = file_path + "/keys.dat";
+   string values_path = file_path + "/values.dat";   
+   
+   ifstream keys_f(keys_path, ios::in | ios::binary);
+   ifstream values_f(values_path, ios::in | ios::binary);
+      
+   keys_f.seekg(0, keys_f.end);
+   auto kN = keys_f.tellg();              
+   keys_f.seekg(0, keys_f.beg);
+   
+   values_f.seekg(0, values_f.end);
+   auto vN = values_f.tellg();              
+   values_f.seekg(0, values_f.beg);
+   
+   vector<bitset<2*k>> keys(kN / sizeof(bitset<2*k>));
+   vector<ushort> values(vN / sizeof(ushort));
+   
+   keys_f.read(reinterpret_cast<char*>(keys.data()), keys.size()*sizeof(bitset<2*k>));
+   values_f.read(reinterpret_cast<char*>(values.data()), values.size()*sizeof(ushort));
+   
+   keys_f.close();
+   values_f.close();
 
-	unordered_map<bitset<2*k>, ushort> kmers_;
+   unordered_map<bitset<2*k>, ushort> kmers_;
 
-    	for(size_t i = 0; i < keys.size(); i++)
-        	kmers_[keys[i]] += values[i];
+   for(size_t i = 0; i < keys.size(); i++)
+      kmers_[keys[i]] += values[i];
 
-   	ofstream m_stream(file_path + "_nr.tsv");
-   	for (auto &pair_ : kmers_)
-      		if (pair_.first != 0 && pair_.second != 1)
-         		m_stream << bit_decode(pair_.first) << "\t" << pair_.second << '\n';
-   	m_stream.close();
-   	filesystem::remove_all(file_path); 
+   ofstream m_stream(file_path + "_nr.tsv");
+   for (auto &pair_ : kmers_)
+      if (pair_.first != 0 && pair_.second != 1)
+         m_stream << bit_decode(pair_.first) << "\t" << pair_.second << '\n';
+   m_stream.close();
+   filesystem::remove_all(file_path); 
 }
 
 int main(int argc, char *argv[])
@@ -242,12 +241,11 @@ int main(int argc, char *argv[])
       size_t NUM_FILES = atoi(argv[2]);
       string output_path = argv[3];
       if (output_path[output_path.size()-1] != '/')
-		output_path += '/';
-	
+         output_path += '/';
+   
       string accession_list[2];
       accession_list[0] = "./data/" + accession + "_1.fq";
       accession_list[1] = "./data/" + accession + "_2.fq";
-
 
       mutex *my_mutex = new mutex[NUM_FILES];
 
@@ -255,50 +253,59 @@ int main(int argc, char *argv[])
       cout << "PROCESSING ACCESSION: " << accession << endl;
       auto start = chrono::steady_clock::now();
 
+      vector<string> reads;
 
-      //#################################
-      vector<string> *chunks = new vector<string>[NUM_CHUNKS];
+      // Load reads from accession files
       for (auto & accession_path : accession_list)
       {
          cout << "+++ PROCESSING " << accession_path << endl;
          auto accession_obj = new Accession(accession_path);
          accession_obj->load_reads();
          cout << "num reads: " << accession_obj->reads.size() << endl;
-         cout << "splitting file into " << NUM_CHUNKS << "chunks" << endl;
-
-         for (size_t i = 0; i < accession_obj->reads.size(); i++)
-         {
-            auto idx = i % NUM_CHUNKS;
-            chunks[idx].push_back(accession_obj->reads[i]);
-         }
-	delete accession_obj;
+         reads.insert(reads.end(), accession_obj->reads.begin(), accession_obj->reads.end());
+         delete accession_obj;
          cout << "+++++++++++++++++++++" << endl;
       }
+
+      size_t NUM_CHUNKS = reads.size() / 1000; // Example: Split into chunks of 1000 reads
+      cout << "Splitting into " << NUM_CHUNKS << " chunks" << endl;
+
+      // Split reads into chunks
+      vector<vector<string>> chunks(NUM_CHUNKS);
+      for (size_t i = 0; i < reads.size(); i++)
+      {
+         auto idx = i % NUM_CHUNKS;
+         chunks[idx].push_back(reads[i]);
+      }
+
       auto end = chrono::steady_clock::now();
-      cout << "loading & chunking time in seconds: "
+      cout << "Loading & chunking time in seconds: "
            << chrono::duration_cast<chrono::seconds>(end - start).count()
            << " sec" << endl;
-      //#################################
+
+      // Create output directories
       filesystem::remove_all(output_path + accession);
       filesystem::create_directory(output_path);
       filesystem::create_directory(output_path + accession);
 
+      // Open streams for key and value storage
       ofstream *key_streams = new ofstream[NUM_FILES];
       ofstream *value_streams = new ofstream[NUM_FILES];
-      for (size_t i = 0; i < NUM_FILES; i++) {
+      for (size_t i = 0; i < NUM_FILES; i++)
+      {
          auto fni = output_path + accession + "/" + to_string(i);
          filesystem::create_directory(fni);
          key_streams[i].open(fni + "/keys.dat", std::ios::app | std::ios::binary);
          value_streams[i].open(fni + "/values.dat", std::ios::app | std::ios::binary);
       }
 
-
       thread_pool pool;
 
       start = chrono::steady_clock::now();
 
-      cout << "building Kmer index ... will take long" << endl;
+      cout << "Building Kmer index ... This will take a while" << endl;
 
+      // Process each chunk in parallel
       for (size_t i = 0; i < NUM_CHUNKS; i++)
       {
          auto &chunk = chunks[i];
@@ -306,46 +313,48 @@ int main(int argc, char *argv[])
                         {
                            auto ko = new kmers_obj(i, chunk);
                            ko->index(key_streams, value_streams, my_mutex, NUM_FILES);
-                           delete ko; });
+                           delete ko;
+                        });
       }
 
       pool.wait_for_tasks();
-      delete [] chunks;	
+      delete[] chunks;
 
-      for (size_t i = 0; i < NUM_FILES; i++) {
+      // Close key and value streams
+      for (size_t i = 0; i < NUM_FILES; i++)
+      {
          key_streams[i].close();
          value_streams[i].close();
       }
 
       end = chrono::steady_clock::now();
-      cout << "building Kmer Index time: "
+      cout << "Building Kmer Index time: "
            << chrono::duration_cast<chrono::seconds>(end - start).count()
            << " sec" << endl;
 
-      // merging
+      // Merge results
       start = chrono::steady_clock::now();
-      cout << "+++++ Deduplicating ... " << endl;
+      cout << "Deduplicating ..." << endl;
 
       string path = output_path + accession, fn;
       int i = 0;
       for (const auto &f : filesystem::directory_iterator(path))
       {
-	if (f.is_directory())  // Check if the entry is a directory
-	  {
-	    fn = f.path();
-	    pool.push_task([i, fn]
-                        { dedup_chunk(fn); });
-	    cout << "Deduping " << fn << endl;
-	    i++;
-	  }
+         if (f.is_directory())
+         {
+            fn = f.path();
+            pool.push_task([i, fn]
+                           { dedup_chunk(fn); });
+            cout << "Deduping " << fn << endl;
+            i++;
+         }
       }
 
       pool.wait_for_tasks();
       end = chrono::steady_clock::now();
-      cout << "Deduplicating took: "
+      cout << "Deduplication took: "
            << chrono::duration_cast<chrono::seconds>(end - start).count()
            << " sec" << endl;
-
 
       delete[] my_mutex;
       delete[] key_streams;
@@ -362,3 +371,4 @@ int main(int argc, char *argv[])
 
    return 0;
 }
+

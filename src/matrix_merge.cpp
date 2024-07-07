@@ -193,7 +193,7 @@ int main(int argc, char *argv[])
 {
 	string input_path, accessions_path;
 	uint file_index;
-	uint min_occur = 6;
+	uint min_occur = 0;
 	std::string delimiter = "\t";  // Default value: tab
 	bool show_count = true;  // Default is to show counts
 
