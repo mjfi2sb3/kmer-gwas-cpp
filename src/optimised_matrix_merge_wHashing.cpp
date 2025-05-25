@@ -58,7 +58,7 @@ struct SparseKmerData {
  */
 struct AccessionData {
     uint16_t accession_id;
-    vector<pair<string, uint16_t>> kmer_counts;  // (kmer_string, count) pairs - keep original strings
+    vector<pair<uint64_t, uint16_t>> kmer_counts;  // (kmer_hash, count) pairs
     bool load_success;
     string error_message;
     
@@ -217,8 +217,8 @@ vector<string> load_accessions(const string& accessions_path) {
  * load_single_accession_data: Load k-mer data for one accession
  * 
  * This function is designed to be called in parallel by multiple threads.
- * It loads data from one accession file. We now keep the original k-mer strings
- * to avoid hash collision issues and ensure exact k-mer reconstruction.
+ * It loads data from one accession file and converts k-mer strings to hashes
+ * immediately to save memory.
  */
 AccessionData load_single_accession_data(const string& accession_name, 
                                        uint16_t accession_id,
@@ -228,9 +228,6 @@ AccessionData load_single_accession_data(const string& accession_name,
     data.accession_id = accession_id;
     
     string file_path = input_path + accession_name + "/" + to_string(file_index) + "_nr.tsv";
-    
-    // Debug: Print the file path being attempted
-    // cout << "Attempting to load: " << file_path << endl;
     
     // Check if file exists before trying to open it
     if (!filesystem::exists(file_path)) {
@@ -263,8 +260,9 @@ AccessionData load_single_accession_data(const string& accession_name,
             string kmer = record[0];
             uint16_t count = static_cast<uint16_t>(stoi(record[1]));
             
-            // Store the original k-mer string to avoid hash issues
-            data.kmer_counts.emplace_back(kmer, count);
+            // Convert k-mer to hash immediately to save memory
+            uint64_t kmer_hash = kmer_to_hash(kmer);
+            data.kmer_counts.emplace_back(kmer_hash, count);
             
         } catch (const exception& e) {
             data.error_message = "Error parsing line " + to_string(line_num) + 
@@ -317,36 +315,18 @@ vector<AccessionData> load_all_accession_data_parallel(
     vector<AccessionData> results;
     results.reserve(accessions.size());
     
-    size_t successful_loads = 0;
-    size_t failed_loads = 0;
-    
     for (size_t i = 0; i < futures.size(); i++) {
         auto data = futures[i].get();
         
         if (!data.load_success) {
-            cerr << "Warning: Failed to load accession " << accessions[i] << ": " 
+            cerr << "Error loading accession " << accessions[i] << ": " 
                  << data.error_message << endl;
-            failed_loads++;
-            // Continue processing other accessions instead of failing completely
-            continue;
+            throw runtime_error("Failed to load accession data");
         }
         
         cout << "Loaded " << data.kmer_counts.size() << " k-mers from " 
              << accessions[i] << endl;
         results.push_back(move(data));
-        successful_loads++;
-    }
-    
-    cout << "Successfully loaded " << successful_loads << " accessions" << endl;
-    cout << "Failed to load " << failed_loads << " accessions" << endl;
-    
-    if (results.empty()) {
-        throw runtime_error("No accession data could be loaded - check file paths and permissions");
-    }
-    
-    if (failed_loads > 0) {
-        cout << "Warning: Some accessions failed to load. Continuing with " 
-             << successful_loads << " accessions." << endl;
     }
     
     return results;
@@ -360,23 +340,24 @@ vector<AccessionData> load_all_accession_data_parallel(
  * build_sparse_matrix: Build sparse k-mer matrix from loaded data
  * 
  * This function takes the loaded accession data and builds a sparse matrix
- * representation. We now use k-mer strings as keys to avoid hash collision issues.
+ * representation. The key insight is that most k-mers don't appear in all
+ * accessions, so we only store non-zero entries.
  */
-unordered_map<string, SparseKmerData> build_sparse_matrix(
+unordered_map<uint64_t, SparseKmerData> build_sparse_matrix(
     const vector<AccessionData>& accession_data) {
     
     cout << "Building sparse matrix..." << endl;
     
-    unordered_map<string, SparseKmerData> matrix;
+    unordered_map<uint64_t, SparseKmerData> matrix;
     
     // Process each accession's k-mer data
     for (const auto& acc_data : accession_data) {
         cout << "Processing accession " << acc_data.accession_id 
              << " with " << acc_data.kmer_counts.size() << " k-mers" << endl;
         
-        for (const auto& [kmer_string, count] : acc_data.kmer_counts) {
+        for (const auto& [kmer_hash, count] : acc_data.kmer_counts) {
             // Add this k-mer occurrence to the sparse matrix
-            matrix[kmer_string].add_occurrence(acc_data.accession_id, count);
+            matrix[kmer_hash].add_occurrence(acc_data.accession_id, count);
         }
     }
     
@@ -388,15 +369,16 @@ unordered_map<string, SparseKmerData> build_sparse_matrix(
  * write_matrix_results: Write matrix and core k-mer results to files
  * 
  * This function writes the results using buffered I/O for better performance.
- * Now properly handles k-mer strings without hash conversion issues.
+ * It also handles the conversion back to k-mer strings for output.
  */
 void write_matrix_results(
-    const unordered_map<string, SparseKmerData>& matrix,
+    const unordered_map<uint64_t, SparseKmerData>& matrix,
     uint32_t file_index,
     const string& output_dir,
     const string& delimiter,
     bool show_count,
-    size_t num_accessions) {
+    size_t num_accessions,
+    size_t kmer_length = 51) {  // Default k-mer length, should be parameterized
     
     cout << "Writing results to " << output_dir << endl;
     
@@ -415,17 +397,20 @@ void write_matrix_results(
     size_t core_kmers = 0;
     size_t total_kmers = 0;
     
-    for (const auto& [kmer_string, sparse_data] : matrix) {
+    for (const auto& [kmer_hash, sparse_data] : matrix) {
         total_kmers++;
+        
+        // Convert hash back to k-mer string for output
+        string kmer_str = hash_to_kmer(kmer_hash, kmer_length);
         
         // Check if this is a core k-mer (present in all accessions)
         if (sparse_data.total_accessions == num_accessions) {
-            core_writer.write(kmer_string + "\n");
+            core_writer.write(kmer_str + "\n");
             core_kmers++;
         }
         
-        // Write matrix row - start with k-mer string
-        string row = kmer_string;
+        // Write matrix row
+        string row = kmer_str;
         
         // Create full count vector from sparse data
         vector<uint16_t> full_counts(num_accessions, 0);
