@@ -168,10 +168,19 @@ public:
       string kmer;
       for (auto &seq : chunk)
       {
+         // Skip sequences shorter than k
+         if (seq.size() < k)
+            continue;
+
          for (size_t i = 0; i < seq.size() - k + 1; i++)
          {
             kmer = seq.substr(i, k);
             kmer = canonical(kmer);
+
+            // Skip kmers with ambiguous bases (N, etc.)
+            if (kmer.empty())
+               continue;
+
             auto code = bit_encode(kmer);
             kmers_[code]++;
          }
@@ -233,8 +242,8 @@ void dedup_chunk(const string file_path)
    	ofstream m_stream(file_path + "_nr.tsv");
    	for (auto &pair_ : kmers_)
       		// if (pair_.first != 0 && pair_.second != 1)
-            if (pair_.first != 0 )
-         		m_stream << bit_decode(pair_.first) << "\t" << pair_.second << '\n';
+            // if (pair_.first != 0 )
+         	m_stream << bit_decode(pair_.first) << "\t" << pair_.second << '\n';
    	m_stream.close();
    	filesystem::remove_all(file_path); 
 }
