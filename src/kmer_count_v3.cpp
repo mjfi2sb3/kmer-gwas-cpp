@@ -146,10 +146,11 @@ class kmers_obj
 public:
    unordered_map<bitset<2*k>, ushort> kmers_;
    size_t chunk_index;
+   size_t total_chunks;
    vector<string> chunk;
-   kmers_obj(size_t chunk_index, vector<string> &chunk) : chunk_index(chunk_index), chunk(chunk)
+   kmers_obj(size_t chunk_index, size_t total_chunks, vector<string> &chunk) : chunk_index(chunk_index), total_chunks(total_chunks), chunk(chunk)
    {
-      cout << "Running Chunk: " << chunk_index << "/" << NUM_CHUNKS << endl;
+      cout << "Running Chunk: " << chunk_index << "/" << total_chunks << endl;
    };
 
    void index(ofstream *key_streams, ofstream *value_streams, mutex *my_mutex, size_t num_files)
@@ -268,6 +269,8 @@ int main(int argc, char *argv[])
       }
 
       size_t NUM_CHUNKS = reads.size() / 1000; // Example: Split into chunks of 1000 reads
+      if (NUM_CHUNKS < 10) NUM_CHUNKS = 10;           // Minimum 10 chunks
+      if (NUM_CHUNKS > 100000) NUM_CHUNKS = 100000;   // Maximum 100,000 chunks
       cout << "Splitting into " << NUM_CHUNKS << " chunks" << endl;
 
       // Split reads into chunks
@@ -309,16 +312,15 @@ int main(int argc, char *argv[])
       for (size_t i = 0; i < NUM_CHUNKS; i++)
       {
          auto &chunk = chunks[i];
-         pool.push_task([i, NUM_FILES, &chunk, &key_streams, &value_streams,  &my_mutex]
+         pool.push_task([i, NUM_CHUNKS, NUM_FILES, &chunk, &key_streams, &value_streams,  &my_mutex]
                         {
-                           auto ko = new kmers_obj(i, chunk);
+                           auto ko = new kmers_obj(i, NUM_CHUNKS, chunk);
                            ko->index(key_streams, value_streams, my_mutex, NUM_FILES);
                            delete ko;
                         });
       }
 
       pool.wait_for_tasks();
-      delete[] chunks;
 
       // Close key and value streams
       for (size_t i = 0; i < NUM_FILES; i++)
