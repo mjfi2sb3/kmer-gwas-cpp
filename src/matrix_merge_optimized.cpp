@@ -52,18 +52,27 @@ public:
     }
 
     void insert(const string& kmer, ushort acc_index, ushort count) {
+        if (kmer.empty()) return;  // Safety check
+
         size_t lock_idx = get_lock_index(kmer);
         lock_guard<mutex> lock(*mutexes_[lock_idx]);
 
-        auto& entries = data_[kmer];
-        // Check if this accession already has an entry (shouldn't happen normally)
-        for (auto& entry : entries) {
-            if (entry.acc_index == acc_index) {
-                entry.count = count;
-                return;
+        // More efficient: try to find first, only iterate if key exists
+        auto it = data_.find(kmer);
+        if (it == data_.end()) {
+            // New kmer - just insert
+            data_[kmer] = vector<SparseEntry>{SparseEntry(acc_index, count)};
+        } else {
+            // Existing kmer - check if this accession already has an entry
+            auto& entries = it->second;
+            for (auto& entry : entries) {
+                if (entry.acc_index == acc_index) {
+                    entry.count = count;
+                    return;
+                }
             }
+            entries.emplace_back(acc_index, count);
         }
-        entries.emplace_back(acc_index, count);
     }
 
     const unordered_map<string, vector<SparseEntry>>& get_data() const {
@@ -134,13 +143,18 @@ void process_accession_file(
         size_t local_kmer_count = 0;
         string line;
         while (getline(stream, line)) {
+            if (line.empty()) continue;  // Skip empty lines
+
             auto record = split(line, '\t');
             if (record.size() != 2) {
-                throw runtime_error("Invalid format in file: " + file_path);
+                throw runtime_error("Invalid format in file: " + file_path + " (line: " + line + ")");
             }
 
             const string& key = record[0];
+            if (key.empty()) continue;  // Skip empty keys
+
             ushort value = stoi(record[1]);
+            if (value == 0) continue;  // Skip zero counts (optimization)
 
             matrix.insert(key, acc_index, value);
             local_kmer_count++;
@@ -209,9 +223,10 @@ void merge_chunk(
 
                 process_accession_file(file_path, acc_index, matrix, files_processed, total_kmers_read);
 
-                // Progress update
+                // Progress update (thread-safe)
                 size_t processed = files_processed.load();
-                if (processed % 10 == 0 || processed == accessions.size()) {
+                if (processed % 100 == 0 || processed == accessions.size()) {
+                    lock_guard<mutex> lock(error_mutex);
                     cout << "Processed " << processed << "/" << accessions.size()
                          << " accessions..." << endl;
                 }
@@ -321,8 +336,8 @@ int main(int argc, char *argv[])
     bool show_count = true;  // Default is to show counts
     size_t num_threads = thread::hardware_concurrency();
     if (num_threads == 0) num_threads = 4;  // Fallback
-    // Cap at reasonable maximum to avoid resource exhaustion
-    if (num_threads > 64) num_threads = 64;
+    // Conservative defaults for stability
+    if (num_threads > 32) num_threads = 32;  // Lower default cap for memory safety
 
     // Define the long options
     static struct option long_options[] = {
@@ -429,9 +444,10 @@ int main(int argc, char *argv[])
                     cerr << "Error: --threads must be greater than 0." << endl;
                     return -1;
                 }
-                if (num_threads > 64) {
-                    cout << "Warning: Capping threads at 64 (requested: " << num_threads << ")" << endl;
-                    num_threads = 64;
+                if (num_threads > 48) {
+                    cout << "Warning: Capping threads at 48 (requested: " << num_threads << ")" << endl;
+                    cout << "Note: For very large datasets, start with 8-16 threads to avoid memory issues" << endl;
+                    num_threads = 48;
                 }
                 break;
             default:
@@ -449,7 +465,12 @@ int main(int argc, char *argv[])
              << "\t\t--threshold OBSOLETE & INACTIVE <min/max occurence threshold> (default: " << min_occur << ")\n"
              << "\t\t--delimiter <delimiter type: tab|none> (default: " << (delimiter == "\t" ? "tab" : (delimiter == " " ? "space" : "none")) << ")\n"
              << "\t\t--count <print matrix as absence/presence or actual k-mer counts; type: y|n> (default: " << (show_count ? "y" : "n") << ")\n"
-             << "\t\t--threads <number of parallel threads> (default: " << num_threads << ")\n\n";
+             << "\t\t--threads <number of parallel threads> (default: " << num_threads << ", max: 48)\n"
+             << "\n"
+             << "Performance tips:\n"
+             << "  - For large datasets (1000+ accessions), start with --threads 8 or 16\n"
+             << "  - Monitor memory usage and increase threads if memory allows\n"
+             << "  - Optimal thread count is usually 2-4x the number of physical cores\n\n";
         return -1;
     }
 
