@@ -36,14 +36,16 @@ class SparseMatrix {
 private:
     unordered_map<string, vector<SparseEntry>> data_;
     vector<mutex> mutexes_;  // Fine-grained locking by hash
-    static const size_t NUM_LOCKS = 1024;
+    static const size_t NUM_LOCKS = 256;  // Reduced to avoid resource exhaustion
 
     size_t get_lock_index(const string& key) const {
         return hash<string>{}(key) % NUM_LOCKS;
     }
 
 public:
-    SparseMatrix() : mutexes_(NUM_LOCKS) {}
+    SparseMatrix() {
+        mutexes_.resize(NUM_LOCKS);
+    }
 
     void insert(const string& kmer, ushort acc_index, ushort count) {
         size_t lock_idx = get_lock_index(kmer);
@@ -183,36 +185,65 @@ void merge_chunk(
     atomic<size_t> files_processed(0);
     atomic<size_t> total_kmers_read(0);
     atomic<size_t> next_acc_index(0);
+    atomic<bool> error_occurred(false);
+    string error_message;
+    mutex error_mutex;
 
     auto start_reading = chrono::steady_clock::now();
 
     // Launch worker threads
     auto worker = [&]() {
-        while (true) {
-            size_t acc_index = next_acc_index.fetch_add(1);
-            if (acc_index >= accessions.size()) break;
+        try {
+            while (true) {
+                if (error_occurred.load()) break;  // Stop on error
 
-            string file_path = input_path + accessions[acc_index] + "/" +
-                             to_string(file_index) + "_nr.tsv";
+                size_t acc_index = next_acc_index.fetch_add(1);
+                if (acc_index >= accessions.size()) break;
 
-            process_accession_file(file_path, acc_index, matrix, files_processed, total_kmers_read);
+                string file_path = input_path + accessions[acc_index] + "/" +
+                                 to_string(file_index) + "_nr.tsv";
 
-            // Progress update
-            size_t processed = files_processed.load();
-            if (processed % 10 == 0 || processed == accessions.size()) {
-                cout << "Processed " << processed << "/" << accessions.size()
-                     << " accessions..." << endl;
+                process_accession_file(file_path, acc_index, matrix, files_processed, total_kmers_read);
+
+                // Progress update
+                size_t processed = files_processed.load();
+                if (processed % 10 == 0 || processed == accessions.size()) {
+                    cout << "Processed " << processed << "/" << accessions.size()
+                         << " accessions..." << endl;
+                }
             }
+        } catch (const exception& e) {
+            error_occurred.store(true);
+            lock_guard<mutex> lock(error_mutex);
+            error_message = e.what();
         }
     };
 
+    threads.reserve(num_threads);
     for (size_t i = 0; i < num_threads; i++) {
-        threads.emplace_back(worker);
+        try {
+            threads.emplace_back(worker);
+        } catch (const system_error& e) {
+            cerr << "Failed to create thread " << i << ": " << e.what() << endl;
+            cerr << "Continuing with " << threads.size() << " threads..." << endl;
+            break;
+        }
     }
+
+    if (threads.empty()) {
+        throw runtime_error("Failed to create any worker threads");
+    }
+
+    cout << "Successfully launched " << threads.size() << " worker threads" << endl;
 
     // Wait for all threads
     for (auto& t : threads) {
         t.join();
+    }
+
+    // Check if any errors occurred during processing
+    if (error_occurred.load()) {
+        throw runtime_error("Error during parallel processing: " + error_message);
     }
 
     auto end_reading = chrono::steady_clock::now();
@@ -286,6 +317,8 @@ int main(int argc, char *argv[])
     bool show_count = true;  // Default is to show counts
     size_t num_threads = thread::hardware_concurrency();
     if (num_threads == 0) num_threads = 4;  // Fallback
+    // Cap at reasonable maximum to avoid resource exhaustion
+    if (num_threads > 64) num_threads = 64;
 
     // Define the long options
     static struct option long_options[] = {
@@ -391,6 +424,10 @@ int main(int argc, char *argv[])
                 if (num_threads == 0) {
                     cerr << "Error: --threads must be greater than 0." << endl;
                     return -1;
+                }
+                if (num_threads > 64) {
+                    cout << "Warning: Capping threads at 64 (requested: " << num_threads << ")" << endl;
+                    num_threads = 64;
                 }
                 break;
             default:
