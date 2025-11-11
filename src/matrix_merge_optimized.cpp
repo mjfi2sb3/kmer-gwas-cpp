@@ -284,17 +284,27 @@ void merge_chunk(
 
     size_t core_kmers = 0;
     size_t output_kmers = 0;
+    size_t filtered_kmers = 0;
 
     const auto& data = matrix.get_data();
 
     for (const auto& pair_ : data) {
         const string& kmer = pair_.first;
         const vector<SparseEntry>& entries = pair_.second;
+        size_t num_accessions_with_kmer = entries.size();
 
         // Check if it's a core kmer (present in all accessions)
-        if (entries.size() == NUM_ACC) {
+        if (num_accessions_with_kmer == NUM_ACC) {
             ck_stream << kmer << "\n";
             core_kmers++;
+        }
+
+        // Apply threshold filter: skip kmers that are too rare or too common
+        if (min_occur > 0) {
+            if (num_accessions_with_kmer < min_occur || num_accessions_with_kmer > NUM_ACC - min_occur) {
+                filtered_kmers++;
+                continue;  // Skip this kmer
+            }
         }
 
         // Build dense representation for output
@@ -324,7 +334,12 @@ void merge_chunk(
          << chrono::duration_cast<chrono::seconds>(end_writing - start_writing).count()
          << " seconds" << endl;
     cout << "Core kmers (present in all accessions): " << core_kmers << endl;
-    cout << "Total kmers written: " << output_kmers << endl;
+    if (min_occur > 0) {
+        cout << "Filtered kmers (threshold=" << min_occur << "): " << filtered_kmers << endl;
+        cout << "Kmers written after filtering: " << output_kmers << endl;
+    } else {
+        cout << "Total kmers written: " << output_kmers << endl;
+    }
 }
 
 int main(int argc, char *argv[])
@@ -462,7 +477,9 @@ int main(int argc, char *argv[])
              << "\t\t--input <input path> \n"
              << "\t\t--accessions <accessions path> \n"
              << "\t\t--index <file index which corresponds to bin> \n"
-             << "\t\t--threshold OBSOLETE & INACTIVE <min/max occurence threshold> (default: " << min_occur << ")\n"
+             << "\t\t--threshold <min/max occurrence threshold> (default: " << min_occur << ")\n"
+             << "\t\t            Filters out kmers appearing in < threshold or > (N-threshold) accessions\n"
+             << "\t\t            Set to 0 to disable filtering (keep all kmers)\n"
              << "\t\t--delimiter <delimiter type: tab|none> (default: " << (delimiter == "\t" ? "tab" : (delimiter == " " ? "space" : "none")) << ")\n"
              << "\t\t--count <print matrix as absence/presence or actual k-mer counts; type: y|n> (default: " << (show_count ? "y" : "n") << ")\n"
              << "\t\t--threads <number of parallel threads> (default: " << num_threads << ", max: 48)\n"
@@ -502,6 +519,12 @@ int main(int argc, char *argv[])
         cout << "Number of accessions: " << NUM_ACC << std::endl;
         cout << "Output Folder: " << output_dir << std::endl;
         cout << "Number of threads: " << num_threads << std::endl;
+        if (min_occur > 0) {
+            cout << "Threshold filtering: ENABLED (min_occur=" << min_occur
+                 << ", keeping kmers in range [" << min_occur << ", " << (NUM_ACC - min_occur) << "])" << endl;
+        } else {
+            cout << "Threshold filtering: DISABLED (keeping all kmers)" << endl;
+        }
 
         auto start = chrono::steady_clock::now();
 
