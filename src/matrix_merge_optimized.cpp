@@ -20,6 +20,7 @@
 #include <getopt.h>
 #include <thread>
 #include <atomic>
+#include <memory>
 
 using namespace std;
 
@@ -35,7 +36,7 @@ struct SparseEntry {
 class SparseMatrix {
 private:
     unordered_map<string, vector<SparseEntry>> data_;
-    vector<mutex> mutexes_;  // Fine-grained locking by hash
+    vector<unique_ptr<mutex>> mutexes_;  // Fine-grained locking by hash
     static const size_t NUM_LOCKS = 256;  // Reduced to avoid resource exhaustion
 
     size_t get_lock_index(const string& key) const {
@@ -44,12 +45,15 @@ private:
 
 public:
     SparseMatrix() {
-        mutexes_.resize(NUM_LOCKS);
+        mutexes_.reserve(NUM_LOCKS);
+        for (size_t i = 0; i < NUM_LOCKS; i++) {
+            mutexes_.emplace_back(make_unique<mutex>());
+        }
     }
 
     void insert(const string& kmer, ushort acc_index, ushort count) {
         size_t lock_idx = get_lock_index(kmer);
-        lock_guard<mutex> lock(mutexes_[lock_idx]);
+        lock_guard<mutex> lock(*mutexes_[lock_idx]);
 
         auto& entries = data_[kmer];
         // Check if this accession already has an entry (shouldn't happen normally)
