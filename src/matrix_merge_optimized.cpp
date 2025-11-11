@@ -292,7 +292,7 @@ int main(int argc, char *argv[])
         {"input", required_argument, 0, 'i'},
         {"accessions", required_argument, 0, 'a'},
         {"index", required_argument, 0, 'f'},
-        {"threshold", optional_argument, 0, 't'},
+        {"threshold", required_argument, 0, 't'},
         {"delimiter", required_argument, 0, 'd'},
         {"count", required_argument, 0, 'c'},
         {"threads", required_argument, 0, 'j'},
@@ -306,12 +306,24 @@ int main(int argc, char *argv[])
         switch (c)
         {
             case 'i':
+                if (optarg == nullptr) {
+                    cerr << "Error: --input requires an argument." << endl;
+                    return -1;
+                }
                 input_path = optarg;
                 break;
             case 'a':
+                if (optarg == nullptr) {
+                    cerr << "Error: --accessions requires an argument." << endl;
+                    return -1;
+                }
                 accessions_path = optarg;
                 break;
             case 'f':
+                if (optarg == nullptr) {
+                    cerr << "Error: --index requires an argument." << endl;
+                    return -1;
+                }
                 if (!all_of(optarg, optarg + strlen(optarg), ::isdigit)) {
                     cerr << "Error: --index requires a valid integer argument." << endl;
                     return -1;
@@ -319,12 +331,20 @@ int main(int argc, char *argv[])
                 file_index = stoi(optarg);
                 break;
             case 't':
+                if (optarg == nullptr) {
+                    cerr << "Error: --threshold requires an argument." << endl;
+                    return -1;
+                }
                 min_occur = stoi(optarg);
                 break;
             case '?':
                 // getopt_long will print an error message
                 break;
             case 'd':
+                if (optarg == nullptr) {
+                    cerr << "Error: --delimiter requires an argument." << endl;
+                    return -1;
+                }
                 if (string(optarg) == "tab")
                 {
                     delimiter = "\t";
@@ -340,6 +360,10 @@ int main(int argc, char *argv[])
                 }
                 break;
             case 'c':
+                if (optarg == nullptr) {
+                    cerr << "Error: --count requires an argument." << endl;
+                    return -1;
+                }
                 if (string(optarg) == "y")
                 {
                     show_count = true;
@@ -355,6 +379,10 @@ int main(int argc, char *argv[])
                 }
                 break;
             case 'j':
+                if (optarg == nullptr) {
+                    cerr << "Error: --threads requires an argument." << endl;
+                    return -1;
+                }
                 if (!all_of(optarg, optarg + strlen(optarg), ::isdigit)) {
                     cerr << "Error: --threads requires a valid integer argument." << endl;
                     return -1;
