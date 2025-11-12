@@ -317,12 +317,12 @@ int main(int argc, char *argv[])
 		if (show_count)
 		{
 			//ouput_dir = "matrix_acc"+to_string(NUM_ACC)+"_minOcc"+to_string(min_occur)+"_count_delim-"+delim+"/";
-			ouput_dir = "matrix_acc"+to_string(NUM_ACC)+"_count_delim-"+delim+unique_suffix+"/";
+			ouput_dir = "matrix_acc"+to_string(NUM_ACC)+"_minOcc"+to_string(min_occur)+"_count_delim-"+delim+unique_suffix+"/";
 		}
 		else
 		{
 			//ouput_dir = "matrix_acc"+to_string(NUM_ACC)+"_minOcc"+to_string(min_occur)+"_pres-abs_delim-"+delim+"/";
-			ouput_dir = "matrix_acc"+to_string(NUM_ACC)+"_pres-abs_delim-"+delim+unique_suffix+"/";
+			ouput_dir = "matrix_acc"+to_string(NUM_ACC)+"_minOcc"+to_string(min_occur)+"_pres-abs_delim-"+delim+unique_suffix+"/";
 		}
    		
 		if (!filesystem::exists(ouput_dir)){
