@@ -195,7 +195,7 @@ int main(int argc, char *argv[])
 	uint file_index;
 	uint min_occur = 0;
 	std::string delimiter = "\t";  // Default value: tab
-	bool show_count = true;  // Default is to show counts
+	bool show_count = false;  // Default is to show presence/absence
 
 	// Define the long options
 	static struct option long_options[] = {
@@ -303,18 +303,23 @@ int main(int argc, char *argv[])
 		input_path += '/';
     	auto accessions = get_accessions(accessions_path);
    		size_t NUM_ACC = accessions.size();
-   		
+
+   		// Generate unique suffix using timestamp
+   		auto now = chrono::system_clock::now();
+   		auto timestamp = chrono::duration_cast<chrono::milliseconds>(now.time_since_epoch()).count();
+   		string unique_suffix = "_" + to_string(timestamp);
+
    		std::string ouput_dir = "";
-   		std:string delim = (delimiter == "\t" ? "tab" : (delimiter == " " ? "space" : "none"));
+   		std::string delim = (delimiter == "\t" ? "tab" : (delimiter == " " ? "space" : "none"));
 		if (show_count)
 		{
 			//ouput_dir = "matrix_acc"+to_string(NUM_ACC)+"_minOcc"+to_string(min_occur)+"_count_delim-"+delim+"/";
-			ouput_dir = "matrix_acc"+to_string(NUM_ACC)+"_count_delim-"+delim+"/";
+			ouput_dir = "matrix_acc"+to_string(NUM_ACC)+"_count_delim-"+delim+unique_suffix+"/";
 		}
 		else
 		{
 			//ouput_dir = "matrix_acc"+to_string(NUM_ACC)+"_minOcc"+to_string(min_occur)+"_pres-abs_delim-"+delim+"/";
-			ouput_dir = "matrix_acc"+to_string(NUM_ACC)+"_pres-abs_delim-"+delim+"/";
+			ouput_dir = "matrix_acc"+to_string(NUM_ACC)+"_pres-abs_delim-"+delim+unique_suffix+"/";
 		}
    		
 		if (!filesystem::exists(ouput_dir)){
