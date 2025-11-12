@@ -18,6 +18,7 @@
 #include <fcntl.h>
 #include <filesystem>
 #include <getopt.h>
+#include <unistd.h>
 
 
 using namespace std;
@@ -195,14 +196,14 @@ int main(int argc, char *argv[])
 	uint file_index;
 	uint min_occur = 0;
 	std::string delimiter = "\t";  // Default value: tab
-	bool show_count = true;  // Default is to show counts
+	bool show_count = false;  // Default is to show presence/absence
 
 	// Define the long options
 	static struct option long_options[] = {
 		{"input", required_argument, 0, 'i'},
 		{"accessions", required_argument, 0, 'a'},
 		{"index", required_argument, 0, 'f'},
-		{"threshold", optional_argument, 0, 't'},
+		{"threshold", required_argument, 0, 't'},
 		{"delimiter", required_argument, 0, 'd'},
 		{"count", required_argument, 0, 'c'},
 		{0, 0, 0, 0}
@@ -280,7 +281,8 @@ int main(int argc, char *argv[])
 		     << "\t\t--input <input path> \n"
 		     << "\t\t--accessions <accessions path> \n"
 		     << "\t\t--index <file index which corresponds to bin> \n"
-		     << "\t\t--threshold <min/max occurence threshold> (default: " << min_occur << ")\n"
+		     << "\t\t--threshold <value> (min/max occurence threshold, default: " << min_occur << ")\n"
+		     << "\t\t            Note: Use --threshold 20 or --threshold=20 (both work)\n"
 		     << "\t\t--delimiter <delimiter type: tab|none> (default: " << (delimiter == "\t" ? "tab" : (delimiter == " " ? "space" : "none")) << ")\n"
 		     << "\t\t--count <print matrix as absence/presence or actual k-mer counts; type: y|n> (default: " << (show_count ? "y" : "n") << ")\n\n";
 		return -1;
@@ -303,18 +305,24 @@ int main(int argc, char *argv[])
 		input_path += '/';
     	auto accessions = get_accessions(accessions_path);
    		size_t NUM_ACC = accessions.size();
-   		
+
+   		// Generate unique suffix using timestamp + PID (ensures uniqueness even for simultaneous jobs)
+   		auto now = chrono::system_clock::now();
+   		auto timestamp = chrono::duration_cast<chrono::milliseconds>(now.time_since_epoch()).count();
+   		pid_t pid = getpid();
+   		string unique_suffix = "_" + to_string(timestamp) + "_pid" + to_string(pid);
+
    		std::string ouput_dir = "";
-   		std:string delim = (delimiter == "\t" ? "tab" : (delimiter == " " ? "space" : "none"));
+   		std::string delim = (delimiter == "\t" ? "tab" : (delimiter == " " ? "space" : "none"));
 		if (show_count)
 		{
 			//ouput_dir = "matrix_acc"+to_string(NUM_ACC)+"_minOcc"+to_string(min_occur)+"_count_delim-"+delim+"/";
-			ouput_dir = "matrix_acc"+to_string(NUM_ACC)+"_count_delim-"+delim+"/";
+			ouput_dir = "matrix_acc"+to_string(NUM_ACC)+"_count_delim-"+delim+unique_suffix+"/";
 		}
 		else
 		{
 			//ouput_dir = "matrix_acc"+to_string(NUM_ACC)+"_minOcc"+to_string(min_occur)+"_pres-abs_delim-"+delim+"/";
-			ouput_dir = "matrix_acc"+to_string(NUM_ACC)+"_pres-abs_delim-"+delim+"/";
+			ouput_dir = "matrix_acc"+to_string(NUM_ACC)+"_pres-abs_delim-"+delim+unique_suffix+"/";
 		}
    		
 		if (!filesystem::exists(ouput_dir)){
