@@ -168,12 +168,12 @@ void merge_chunk(const uint file_index, const uint min_occur, string input_path,
     ofstream ck_stream(ouput_dir + to_string(file_index) + "_core.txt");
     
     for (auto & pair_ : matrix_) {
-      // check if a k-mer occurs in all accessions and therefore is flagged as core k-mer
-    if (pair_.second[NUM_ACC] == NUM_ACC ){
-        // std::cout << "kmer: " << pair_.first << std::endl;
-        ck_stream << pair_.first << "\n";
-    }
-	// if (pair_.second[NUM_ACC] < min_occur || pair_.second[NUM_ACC] > NUM_ACC - min_occur ) continue;
+        // check if a k-mer occurs in all accessions and therefore is flagged as core k-mer
+        if (pair_.second[NUM_ACC] == NUM_ACC ){
+            // std::cout << "kmer: " << pair_.first << std::endl;
+            ck_stream << pair_.first << "\n";
+        }
+	   if (pair_.second[NUM_ACC] < min_occur || pair_.second[NUM_ACC] > NUM_ACC - min_occur ) continue;
         m_stream << pair_.first << "\t";
         auto freqs = pair_.second;
         for (int i = 0; i < NUM_ACC ; i++) {
@@ -280,7 +280,7 @@ int main(int argc, char *argv[])
 		     << "\t\t--input <input path> \n"
 		     << "\t\t--accessions <accessions path> \n"
 		     << "\t\t--index <file index which corresponds to bin> \n"
-		     << "\t\t--threshold OBSOLETE & INACTIVE <min/max occurence threshold> (default: " << min_occur << ")\n"
+		     << "\t\t--threshold <min/max occurence threshold> (default: " << min_occur << ")\n"
 		     << "\t\t--delimiter <delimiter type: tab|none> (default: " << (delimiter == "\t" ? "tab" : (delimiter == " " ? "space" : "none")) << ")\n"
 		     << "\t\t--count <print matrix as absence/presence or actual k-mer counts; type: y|n> (default: " << (show_count ? "y" : "n") << ")\n\n";
 		return -1;
