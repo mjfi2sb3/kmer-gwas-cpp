@@ -1,4 +1,15 @@
-*matrix*/
-log*
-*log
-\#*
+# Nextflow
+.nextflow/
+.nextflow.log*
+work/
+results/
+
+# Compiled binaries
+build/
+
+# Data files
+data/
+accessions.txt
+
+# macOS
+.DS_Store

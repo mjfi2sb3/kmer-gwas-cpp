@@ -5,7 +5,38 @@ include { KMER_COUNT   } from './modules/kmer_count'
 include { MATRIX_MERGE } from './modules/matrix_merge'
 
 // Load utility functions (estimateBins)
-evaluate(new File("${projectDir}/lib/utils.nf"))
+//evaluate(new File("${projectDir}/lib/utils.nf"))
+
+// ---------------------------------------------------------------------------
+// Help
+// ---------------------------------------------------------------------------
+def helpMessage() {
+    log.info """
+    Usage:
+        nextflow run main.nf [options]
+
+    Options:
+        --accessions_file   Path to file listing accession IDs, one per line  [default: ${params.accessions_file}]
+        --data_dir          Directory containing paired FASTQ files            [default: ${params.data_dir}]
+        --output_dir        Output directory                                   [default: ${params.output_dir}]
+        --num_bins          Number of k-mer bins                               [default: ${params.num_bins}]
+        --threshold         Minimum count threshold for k-mer inclusion        [default: ${params.threshold}]
+        --count             'y' = counts, 'n' = presence/absence               [default: ${params.count}]
+        --delimiter         Column delimiter: 'tab' or 'none'                  [default: ${params.delimiter}]
+
+    Profiles:
+        -profile standard   Run locally
+        -profile slurm      Submit jobs to SLURM (account k1616, partition workq)
+
+    Example:
+        nextflow run main.nf -profile slurm --accessions_file samples.txt --data_dir /path/to/fastq
+    """.stripIndent()
+}
+
+if (params.help) {
+    helpMessage()
+    exit 0
+}
 
 // ---------------------------------------------------------------------------
 // Workflow entry point
@@ -13,13 +44,13 @@ evaluate(new File("${projectDir}/lib/utils.nf"))
 workflow {
 
     // -- Bin estimation hint (informational only; does not override num_bins) --
-    estimateBins(
-        params.genome_size,
-        params.sequencing_depth,
-        params.available_ram_per_node,
-        /*bytes_per_kmer=*/ 8,
-        params.num_bins
-    )
+    //estimateBins(
+    //    params.genome_size,
+    //    params.sequencing_depth,
+    //    params.available_ram_per_node,
+    //    /*bytes_per_kmer=*/ 8,
+    //    params.num_bins
+    //)
 
     // -- Stage 1: k-mer counting, one job per accession --
     ch_accessions = Channel

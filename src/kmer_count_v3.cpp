@@ -158,6 +158,7 @@ public:
       string kmer;
       for (auto &seq : chunk)
       {
+         if (seq.size() < (size_t)k) continue;
          for (size_t i = 0; i < seq.size() - k + 1; i++)
          {
             kmer = seq.substr(i, k);
