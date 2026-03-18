@@ -32,6 +32,8 @@ process MATRIX_MERGE {
         --index      ${bin_idx} \\
         --threshold  ${params.threshold} \\
         --delimiter  ${params.delimiter} \\
-        --count      ${params.count}
+        --count      ${params.count} \\
+        --core       ${params.core} \\
+        --bins       ${params.num_bins}
     """
 }

@@ -81,7 +81,7 @@ vector<string> get_accessions(const string& accessions_path) {
     return accessions;
 }
 
-void merge_chunk(const uint file_index, const uint min_occur, string input_path, string accessions_path, string delimiter, bool show_count, string ouput_dir)
+void merge_chunk(const uint file_index, const uint min_occur, string input_path, string accessions_path, string delimiter, bool show_count, string ouput_dir, bool write_core)
 { 
 
     auto accessions = get_accessions(accessions_path);
@@ -166,12 +166,12 @@ void merge_chunk(const uint file_index, const uint min_occur, string input_path,
     ofstream ck_stream("matrix_acc"+to_string(NUM_ACC)+"_"+to_string(min_occur)+"/" + to_string(file_index) + "_core.txt");*/
     
     ofstream m_stream(ouput_dir + to_string(file_index) + "_matrix.tsv");
-    ofstream ck_stream(ouput_dir + to_string(file_index) + "_core.txt");
-    
+    ofstream ck_stream;
+    if (write_core) ck_stream.open(ouput_dir + to_string(file_index) + "_core.txt");
+
     for (auto & pair_ : matrix_) {
         // check if a k-mer occurs in all accessions and therefore is flagged as core k-mer
-        if (pair_.second[NUM_ACC] == NUM_ACC ){
-            // std::cout << "kmer: " << pair_.first << std::endl;
+        if (write_core && pair_.second[NUM_ACC] == NUM_ACC) {
             ck_stream << pair_.first << "\n";
         }
 	   if (pair_.second[NUM_ACC] < min_occur || pair_.second[NUM_ACC] > NUM_ACC - min_occur ) continue;
@@ -182,12 +182,12 @@ void merge_chunk(const uint file_index, const uint min_occur, string input_path,
             if (!show_count && freq > 0) freq = 1;
             m_stream << delimiter << freq;
         }
-            
-        m_stream << "\n";    
+
+        m_stream << "\n";
     }
-     
+
     m_stream.close();
-    ck_stream.close();
+    if (write_core) ck_stream.close();
 }
 
 int main(int argc, char *argv[])
@@ -197,6 +197,8 @@ int main(int argc, char *argv[])
 	uint min_occur = 0;
 	std::string delimiter = "\t";  // Default value: tab
 	bool show_count = false;  // Default is to show presence/absence
+	bool write_core = false;  // Default is to skip core k-mers file
+	uint num_bins = 0;
 
 	// Define the long options
 	static struct option long_options[] = {
@@ -206,12 +208,14 @@ int main(int argc, char *argv[])
 		{"threshold", required_argument, 0, 't'},
 		{"delimiter", required_argument, 0, 'd'},
 		{"count", required_argument, 0, 'c'},
+		{"core",  required_argument, 0, 'r'},
+		{"bins",  required_argument, 0, 'b'},
 		{0, 0, 0, 0}
 	};
     int option_index = 0;
     int c;
-    
-    while ((c = getopt_long(argc, argv, "i:a:f:t:d:c:", long_options, &option_index)) != -1) 
+
+    while ((c = getopt_long(argc, argv, "i:a:f:t:d:c:r:b:", long_options, &option_index)) != -1)
     {
         switch (c) 
         {
@@ -266,6 +270,19 @@ int main(int argc, char *argv[])
 				    return -1;
 				}
 				break;
+            case 'r':
+				if (string(optarg) == "y")
+				    write_core = true;
+				else if (string(optarg) == "n")
+				    write_core = false;
+				else {
+				    cerr << "Invalid core option. Use 'y' or 'n'." << endl;
+				    return -1;
+				}
+				break;
+            case 'b':
+                num_bins = stoi(optarg);
+                break;
             default:
                 abort();
         }
@@ -284,7 +301,9 @@ int main(int argc, char *argv[])
 		     << "\t\t--threshold <value> (min/max occurence threshold, default: " << min_occur << ")\n"
 		     << "\t\t            Note: Use --threshold 20 or --threshold=20 (both work)\n"
 		     << "\t\t--delimiter <delimiter type: tab|none> (default: " << (delimiter == "\t" ? "tab" : (delimiter == " " ? "space" : "none")) << ")\n"
-		     << "\t\t--count <print matrix as absence/presence or actual k-mer counts; type: y|n> (default: " << (show_count ? "y" : "n") << ")\n\n";
+		     << "\t\t--count <print matrix as absence/presence or actual k-mer counts; type: y|n> (default: " << (show_count ? "y" : "n") << ")\n"
+		     << "\t\t--core  <write core k-mers file (_core.txt); type: y|n> (default: n)\n"
+		     << "\t\t--bins  <number of bins (used in output folder name)> (default: 0)\n\n";
 		return -1;
 	}
 
@@ -310,11 +329,11 @@ int main(int argc, char *argv[])
    		std::string delim = (delimiter == "\t" ? "tab" : (delimiter == " " ? "space" : "none"));
 		if (show_count)
 		{
-			ouput_dir = "matrix_acc"+to_string(NUM_ACC)+"_minOcc"+to_string(min_occur)+"_count_delim-"+delim+"/";
+			ouput_dir = "matrix_acc"+to_string(NUM_ACC)+"_bins"+to_string(num_bins)+"_minOcc"+to_string(min_occur)+"_count_delim-"+delim+"/";
 		}
 		else
 		{
-			ouput_dir = "matrix_acc"+to_string(NUM_ACC)+"_minOcc"+to_string(min_occur)+"_pres-abs_delim-"+delim+"/";
+			ouput_dir = "matrix_acc"+to_string(NUM_ACC)+"_bins"+to_string(num_bins)+"_minOcc"+to_string(min_occur)+"_pres-abs_delim-"+delim+"/";
 		}
    		
 		if (!filesystem::exists(ouput_dir)){
@@ -328,7 +347,7 @@ int main(int argc, char *argv[])
         
         auto start = chrono::steady_clock::now();
 
-        merge_chunk(file_index, min_occur, input_path, accessions_path, delimiter, show_count, ouput_dir);
+        merge_chunk(file_index, min_occur, input_path, accessions_path, delimiter, show_count, ouput_dir, write_core);
 
         auto end = chrono::steady_clock::now();
         cout << "processing index: " << file_index << " took "

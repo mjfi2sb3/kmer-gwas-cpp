@@ -23,6 +23,7 @@ def helpMessage() {
         --threshold         Minimum count threshold for k-mer inclusion        [default: ${params.threshold}]
         --count             'y' = counts, 'n' = presence/absence               [default: ${params.count}]
         --delimiter         Column delimiter: 'tab' or 'none'                  [default: ${params.delimiter}]
+        --core              'y' = write core k-mers file, 'n' = skip           [default: ${params.core}]
 
     Profiles:
         -profile standard   Run locally
@@ -73,6 +74,7 @@ def paramSummary() {
       threshold              : ${params.threshold}
       count                  : ${params.count}
       delimiter              : ${params.delimiter}
+      core                   : ${params.core}
     Output
       output_dir             : ${params.output_dir}
     -----------------------------------------
