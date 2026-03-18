@@ -12,7 +12,21 @@ process MATRIX_MERGE {
 
     script:
     """
-    ${projectDir}/build/matrix_merge \\
+    # Load gcc if not available or below minimum version (9)
+    if ! command -v g++ &>/dev/null || [[ \$(g++ -dumpversion | cut -d. -f1) -lt 9 ]]; then
+        module load gcc/12.2.0 2>/dev/null || true
+    fi
+    if ! command -v g++ &>/dev/null; then
+        echo "WARNING: g++ not available after module load attempt" >&2
+    elif [[ \$(g++ -dumpversion | cut -d. -f1) -lt 9 ]]; then
+        echo "WARNING: g++ \$(g++ -dumpversion) < 9 -- compilation may fail" >&2
+    fi
+
+    g++ -std=c++17 -O3 -march=native -pthread -o matrix_merge \
+        ${projectDir}/src/matrix_merge.cpp \
+        ${projectDir}/src/mmap_io.cpp
+
+    ./matrix_merge \\
         --input      ${kmer_count_root}/ \\
         --accessions ${accessions_file} \\
         --index      ${bin_idx} \\

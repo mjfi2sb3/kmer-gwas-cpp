@@ -39,9 +39,53 @@ if (params.help) {
 }
 
 // ---------------------------------------------------------------------------
+// GCC version check (runs on login node — early warning only)
+// ---------------------------------------------------------------------------
+def checkGcc(int minMajor) {
+    def proc = ['bash', '-c', 'g++ -dumpversion 2>/dev/null || echo ""'].execute()
+    proc.waitFor()
+    def version = proc.text.trim()
+    if (!version) {
+        log.warn "WARNING: g++ not found on PATH. Processes will attempt 'module load gcc/12.2.0' before compiling."
+        return
+    }
+    int major = version.split('\\.')[0].toInteger()
+    if (major < minMajor) {
+        log.warn "WARNING: g++ ${version} found but >= ${minMajor} required. Processes will attempt 'module load gcc/12.2.0'."
+    } else {
+        log.info "g++ ${version} detected (>= ${minMajor} required) ✔"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Parameter summary
+// ---------------------------------------------------------------------------
+def paramSummary() {
+    log.info """
+    =========================================
+     k m e r - G W A S  p i p e l i n e
+    =========================================
+    Input
+      accessions_file        : ${params.accessions_file}
+      data_dir               : ${params.data_dir}
+    Pipeline
+      num_bins               : ${params.num_bins}
+      threshold              : ${params.threshold}
+      count                  : ${params.count}
+      delimiter              : ${params.delimiter}
+    Output
+      output_dir             : ${params.output_dir}
+    -----------------------------------------
+    """.stripIndent()
+}
+
+// ---------------------------------------------------------------------------
 // Workflow entry point
 // ---------------------------------------------------------------------------
 workflow {
+
+    paramSummary()
+    checkGcc(9)
 
     // -- Bin estimation hint (informational only; does not override num_bins) --
     //estimateBins(
