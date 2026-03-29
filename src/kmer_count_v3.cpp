@@ -221,10 +221,12 @@ void dedup_chunk(const string file_path)
    for(size_t i = 0; i < keys.size(); i++)
       kmers_[keys[i]] += values[i];
 
-   ofstream m_stream(file_path + "_nr.tsv");
+   ofstream m_stream(file_path + "_nr.bin", ios::binary);
    for (auto &pair_ : kmers_)
-      if (pair_.first != 0 && pair_.second != 1)
-         m_stream << bit_decode(pair_.first) << "\t" << pair_.second << '\n';
+      if (pair_.first != 0 && pair_.second != 1) {
+         m_stream.write(reinterpret_cast<const char*>(&pair_.first), sizeof(pair_.first));
+         m_stream.write(reinterpret_cast<const char*>(&pair_.second), sizeof(pair_.second));
+      }
    m_stream.close();
    filesystem::remove_all(file_path); 
 }

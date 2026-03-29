@@ -23,6 +23,18 @@
 
 using namespace std;
 
+const int k = 51;
+const map<string, char> bases = {
+    {"00", 'A'}, {"01", 'C'}, {"10", 'G'}, {"11", 'T'}
+};
+string bit_decode(bitset<2*k> code) {
+    string kmer = "";
+    string bcode = code.to_string();
+    for (size_t i = 0; i < bcode.size(); i += 2)
+        kmer += bases.at(bcode.substr(i, 2));
+    return kmer;
+}
+
 // const size_t NUM_ACC = 100;
 vector<string> split(const string &str, const char &sep)
 {
@@ -86,7 +98,7 @@ void merge_chunk(const uint file_index, const uint min_occur, string input_path,
 
     auto accessions = get_accessions(accessions_path);
     size_t NUM_ACC = accessions.size();
-    unordered_map<string, vector<ushort>> matrix_;
+    unordered_map<bitset<2*k>, vector<ushort>> matrix_;
     // unordered_map<string, ushort[NUM_ACC+1]> matrix_;
     size_t acc_index = 0;	
 
@@ -95,7 +107,7 @@ void merge_chunk(const uint file_index, const uint min_occur, string input_path,
     */
     for (auto &acc : accessions)
     {
-        string file_path = input_path + acc + "/" + to_string(file_index) + "_nr.tsv";
+        string file_path = input_path + acc + "/" + to_string(file_index) + "_nr.bin";
 	    /*if (!filesystem::exists(file_path)) {cout << "file: " << file_path << " doe not exist!" << endl;}*/
 	    if (!filesystem::exists(file_path)) {
             throw runtime_error("File: " + file_path + " does not exist!");
@@ -105,31 +117,26 @@ void merge_chunk(const uint file_index, const uint min_occur, string input_path,
 
     for (auto &acc : accessions)
     {
-        string file_path = input_path + acc + "/" + to_string(file_index) + "_nr.tsv";
+        string file_path = input_path + acc + "/" + to_string(file_index) + "_nr.bin";
         
 	    /*if (!filesystem::exists(file_path)) {cout << "file: " << file_path << " doe not exist!" << endl;}*/
 	    /*if (!filesystem::exists(file_path)) {
             throw runtime_error("File: " + file_path + " does not exist!");
         }*/
 	
-        ifstream stream(file_path);
+        ifstream stream(file_path, ios::binary);
         if (!stream) {
             throw runtime_error("Failed to open file: " + file_path);
         }
-        
-        string line;
-        while (getline(stream, line))
-        {
-            auto record = split(line, '\t');
-            if (record.size() != 2)
-                throw runtime_error("Could not open kmer count files!");
-            string key = record[0];
-            ushort value = stoi(record[1]);
-            if(matrix_.find(key) == matrix_.end())
+
+        bitset<2*k> key;
+        ushort value;
+        while (stream.read(reinterpret_cast<char*>(&key), sizeof(key))) {
+            stream.read(reinterpret_cast<char*>(&value), sizeof(value));
+            if (matrix_.find(key) == matrix_.end())
                 matrix_[key] = vector<ushort>(NUM_ACC+1);
             matrix_[key][acc_index] = value;
             matrix_[key][NUM_ACC]++;
-	    	
         }
         stream.close();
         acc_index++;
@@ -172,10 +179,10 @@ void merge_chunk(const uint file_index, const uint min_occur, string input_path,
     for (auto & pair_ : matrix_) {
         // check if a k-mer occurs in all accessions and therefore is flagged as core k-mer
         if (write_core && pair_.second[NUM_ACC] == NUM_ACC) {
-            ck_stream << pair_.first << "\n";
+            ck_stream << bit_decode(pair_.first) << "\n";
         }
 	   if (pair_.second[NUM_ACC] < min_occur || pair_.second[NUM_ACC] > NUM_ACC - min_occur ) continue;
-        m_stream << pair_.first << "\t";
+        m_stream << bit_decode(pair_.first) << "\t";
         auto freqs = pair_.second;
         for (int i = 0; i < NUM_ACC ; i++) {
             auto freq = freqs[i];
