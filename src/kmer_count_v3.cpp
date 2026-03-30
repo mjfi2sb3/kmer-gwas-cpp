@@ -150,7 +150,7 @@ public:
    vector<string> chunk;
    kmers_obj(size_t chunk_index, size_t total_chunks, vector<string> &chunk) : chunk_index(chunk_index), total_chunks(total_chunks), chunk(chunk)
    {
-      cout << "Running Chunk: " << chunk_index << "/" << total_chunks << endl;
+      // cout << "Running Chunk: " << chunk_index << "/" << total_chunks << endl;
    };
 
    void index(ofstream *key_streams, ofstream *value_streams, mutex *my_mutex, size_t num_files)
