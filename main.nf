@@ -24,6 +24,7 @@ def helpMessage() {
         --count             'y' = counts, 'n' = presence/absence               [default: ${params.count}]
         --delimiter         Column delimiter: 'tab' or 'none'                  [default: ${params.delimiter}]
         --core              'y' = write core k-mers file, 'n' = skip           [default: ${params.core}]
+        --matrix_merge_cpus Number of threads for matrix_merge                 [default: ${params.matrix_merge_cpus}]
 
     Profiles:
         -profile standard   Run locally
@@ -75,6 +76,7 @@ def paramSummary() {
       count                  : ${params.count}
       delimiter              : ${params.delimiter}
       core                   : ${params.core}
+      matrix_merge_cpus      : ${params.matrix_merge_cpus}
     Output
       output_dir             : ${params.output_dir}
     -----------------------------------------

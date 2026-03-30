@@ -34,6 +34,7 @@ process MATRIX_MERGE {
         --delimiter  ${params.delimiter} \\
         --count      ${params.count} \\
         --core       ${params.core} \\
-        --bins       ${params.num_bins}
+        --bins       ${params.num_bins} \\
+        --threads    ${task.cpus}
     """
 }
