@@ -99,7 +99,6 @@ void merge_chunk(const uint file_index, const uint min_occur, string input_path,
                  string accessions_path, string delimiter, bool show_count,
                  string ouput_dir, bool write_core, uint num_threads = 1)
 {
-    const uint   MAX_THREADS = 128;
     const size_t NUM_SHARDS  = 1024;  // must be power of 2
 
     auto accessions = get_accessions(accessions_path);
@@ -145,7 +144,7 @@ void merge_chunk(const uint file_index, const uint min_occur, string input_path,
         // Each thread reads its accessions and inserts directly into the
         // appropriate shard. Threads only contend when hitting the same shard
         // simultaneously (probability ~1/NUM_SHARDS per insert).
-        uint actual_threads = min({num_threads, (uint)NUM_ACC, MAX_THREADS});
+        uint actual_threads = min(num_threads, (uint)NUM_SHARDS);
 
         using ShardMap = unordered_map<bitset<2*k>, vector<ushort>>;
         vector<ShardMap>  shards(NUM_SHARDS);
