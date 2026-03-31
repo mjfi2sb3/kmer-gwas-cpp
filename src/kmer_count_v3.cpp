@@ -13,6 +13,7 @@
 #include <cstring>
 #include <chrono>
 #include "mmap_io.hpp"
+#include <zlib.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -39,6 +40,21 @@ struct membuf : streambuf
    membuf(char *begin, char *end)
    {
       this->setg(begin, begin, end);
+   }
+};
+
+class GzipStreambuf : public streambuf
+{
+   gzFile gz_;
+   char buf_[262144];  // 256 KB inflate buffer
+public:
+   GzipStreambuf(const string& path) : gz_(gzopen(path.c_str(), "rb")) {}
+   ~GzipStreambuf() { if (gz_) gzclose(gz_); }
+   int underflow() override {
+      int n = gzread(gz_, buf_, sizeof(buf_));
+      if (n <= 0) return EOF;
+      setg(buf_, buf_, buf_ + n);
+      return (unsigned char)buf_[0];
    }
 };
 
@@ -70,46 +86,50 @@ public:
    void load_reads()
    {
       string fname = accession_path;
-      int fd = open(fname.c_str(), O_RDONLY);
-      if (fd == -1)
-         handle_error("open");
 
-      struct stat sb;
-      if (fstat(fd, &sb) == -1)
-         handle_error("fstat");
-
-      size_t size_ = sb.st_size;
-
-      char *f = static_cast<char *>(mmap(NULL, size_, PROT_READ, MAP_PRIVATE, fd, 0u));
-      if (f == MAP_FAILED)
-         handle_error("mmap");
-
-      auto l = f + size_;
-      membuf sbuf(f, l);
-      istream in(&sbuf);
-      string line;
+      // Detect gzip by magic bytes (0x1f 0x8b) — works regardless of extension
+      bool is_gz = false;
+      {
+         unsigned char m[2] = {0, 0};
+         FILE* mf = fopen(fname.c_str(), "rb");
+         if (mf) { fread(m, 1, 2, mf); fclose(mf); }
+         is_gz = (m[0] == 0x1f && m[1] == 0x8b);
+      }
 
       reads.reserve((int)1e6);
 
-      string format;
-      getline(in, line);
-      if (line[0] == '>')
-         format = "fasta";
-      else if (line[0] == '@')
-         format = "fastq";
-      else
-         handle_error("unrecognized file format");
-      size_t i = 1;
+      auto parse_fastq = [&](istream& in) {
+         string line, format;
+         getline(in, line);
+         if      (line[0] == '>') format = "fasta";
+         else if (line[0] == '@') format = "fastq";
+         else handle_error("unrecognized file format");
+         size_t i = 1;
+         while (getline(in, line)) {
+            if (i % 4 == 1) reads.push_back(line);
+            i++;
+         }
+      };
 
-      cout << "handling fastq input ... " << endl;
-      while (getline(in, line))
-      {
-         if (i % 4 == 1)
-            reads.push_back(line);
-         i++;
+      if (is_gz) {
+         cout << "handling fastq input (zlib streaming) ... " << endl;
+         GzipStreambuf gzbuf(fname);
+         istream in(&gzbuf);
+         parse_fastq(in);
+      } else {
+         cout << "handling fastq input ... " << endl;
+         int fd = open(fname.c_str(), O_RDONLY);
+         if (fd == -1) handle_error("open");
+         struct stat sb;
+         if (fstat(fd, &sb) == -1) handle_error("fstat");
+         size_t size_ = sb.st_size;
+         char *f = static_cast<char *>(mmap(NULL, size_, PROT_READ, MAP_PRIVATE, fd, 0u));
+         if (f == MAP_FAILED) handle_error("mmap");
+         membuf sbuf(f, f + size_);
+         istream in(&sbuf);
+         parse_fastq(in);
+         munmap(f, size_);
       }
-
-      munmap(f, size_);
    }
 };
 
@@ -233,9 +253,9 @@ void dedup_chunk(const string file_path)
 
 int main(int argc, char *argv[])
 {
-   if (argc != 4)
+   if (argc != 6)
    {
-      cout << "usage: " << argv[0] << " <accession> <number of files> <output folder path>\n";
+      cout << "usage: " << argv[0] << " <accession> <number of files> <output folder path> <R1> <R2>\n";
       return -1;
    }
 
@@ -246,10 +266,8 @@ int main(int argc, char *argv[])
       string output_path = argv[3];
       if (output_path[output_path.size()-1] != '/')
          output_path += '/';
-   
-      string accession_list[2];
-      accession_list[0] = "./data/" + accession + "_1.fq";
-      accession_list[1] = "./data/" + accession + "_2.fq";
+
+      vector<string> accession_list = { argv[4], argv[5] };
 
       mutex *my_mutex = new mutex[NUM_FILES];
 
