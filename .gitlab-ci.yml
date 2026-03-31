@@ -6,6 +6,9 @@ build-container:
   image: docker:24
   services:
     - docker:dind
+  variables:
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_CERTDIR: "/certs"
   before_script:
     - docker login ghcr.io -u $GITHUB_USERNAME -p $GITHUB_TOKEN
   script:
