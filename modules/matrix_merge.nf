@@ -1,6 +1,6 @@
 process MATRIX_MERGE {
     tag "bin_${bin_idx}"
-    publishDir "${params.output_dir}/matrix", mode: 'move', overwrite: true
+    publishDir "${params.output_dir}/matrix", mode: 'copy', overwrite: true
 
     input:
         tuple val(bin_idx), val(kmer_count_root)

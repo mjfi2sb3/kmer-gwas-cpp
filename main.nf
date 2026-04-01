@@ -45,24 +45,58 @@ if (params.help) {
 // ---------------------------------------------------------------------------
 // Parameter summary
 // ---------------------------------------------------------------------------
-def paramSummary(String data_dir) {
+def paramSummary(String accessions_file, String data_dir) {
+    def c_reset  = "\033[0m"
+    def c_banner = "\033[1;36m"   // bold cyan  — banner & dividers
+    def c_head   = "\033[1;33m"   // bold yellow — section headers
+    def c_val    = "\033[0;32m"   // green       — values
+
     log.info """
-    =========================================
-     k m e r - G W A S  p i p e l i n e
-    =========================================
-    Input
-      accessions_file        : ${params.accessions_file}
-      data_dir               : ${data_dir}
-    Pipeline
-      num_bins               : ${params.num_bins}
-      threshold              : ${params.threshold}
-      count                  : ${params.count}
-      delimiter              : ${params.delimiter}
-      core                   : ${params.core}
-      matrix_merge_cpus      : ${params.matrix_merge_cpus}
-    Output
-      output_dir             : ${params.output_dir}
-    -----------------------------------------
+    ${c_banner}=========================================${c_reset}
+    ${c_banner} k m e r - G W A S  p i p e l i n e${c_reset}
+    ${c_banner}=========================================${c_reset}
+    ${c_head}Input${c_reset}
+      accessions_file        : ${c_val}${accessions_file}${c_reset}
+      data_dir               : ${c_val}${data_dir}${c_reset}
+    ${c_head}Pipeline${c_reset}
+      num_bins               : ${c_val}${params.num_bins}${c_reset}
+      threshold              : ${c_val}${params.threshold}${c_reset}
+      count                  : ${c_val}${params.count}${c_reset}
+      delimiter              : ${c_val}${params.delimiter}${c_reset}
+      core                   : ${c_val}${params.core}${c_reset}
+      matrix_merge_cpus      : ${c_val}${params.matrix_merge_cpus}${c_reset}
+    ${c_head}Output${c_reset}
+      output_dir             : ${c_val}${params.output_dir}${c_reset}
+    ${c_banner}-----------------------------------------${c_reset}
+    """.stripIndent()
+}
+
+// ---------------------------------------------------------------------------
+// Completion summary
+// ---------------------------------------------------------------------------
+workflow.onComplete {
+    def c_reset  = "\033[0m"
+    def c_banner = workflow.success ? "\033[1;36m" : "\033[1;31m"  // bold cyan or bold red
+    def c_head   = "\033[1;33m"                                     // bold yellow
+    def c_val    = "\033[0;32m"                                     // green
+    def c_fail   = "\033[0;31m"                                     // red
+
+    log.info """
+    ${c_banner}=========================================${c_reset}
+    ${c_banner} Pipeline ${workflow.success ? 'completed' : 'FAILED'}${c_reset}
+    ${c_banner}=========================================${c_reset}
+    ${c_head}Run${c_reset}
+      Run name   : ${c_val}${workflow.runName}${c_reset}
+      Completed  : ${c_val}${workflow.complete}${c_reset}
+      Duration   : ${c_val}${workflow.duration}${c_reset}
+      CPU hours  : ${c_val}${workflow.stats.computeTimeFmt}${c_reset}
+    ${c_head}Tasks${c_reset}
+      Succeeded  : ${c_val}${workflow.stats.succeededCount}${c_reset}
+      Cached     : ${c_val}${workflow.stats.cachedCount}${c_reset}
+      Failed     : ${workflow.stats.failedCount > 0 ? c_fail : c_val}${workflow.stats.failedCount}${c_reset}
+    ${c_head}Output${c_reset}
+      output_dir : ${c_val}${params.output_dir}${c_reset}
+    ${c_banner}-----------------------------------------${c_reset}
     """.stripIndent()
 }
 
@@ -80,11 +114,12 @@ workflow {
     //    params.num_bins
     //)
 
-    // Resolve data_dir to absolute path — relative inputs (e.g. ./data) break
-    // inside Singularity containers and SLURM work directories
-    def data_dir = file(params.data_dir).toAbsolutePath().toString()
+    // Resolve to absolute paths — relative inputs break inside Singularity
+    // containers and SLURM work directories
+    def accessions_file = file(params.accessions_file).toAbsolutePath().toString()
+    def data_dir        = file(params.data_dir).toAbsolutePath().toString()
 
-    paramSummary(data_dir)
+    paramSummary(accessions_file, data_dir)
 
     // -- Stage 1: k-mer counting, one job per accession --
     ch_accessions = Channel
@@ -117,5 +152,5 @@ workflow {
         .map { bin_idx, roots -> tuple(bin_idx, roots[0]) }
 
     // -- Stage 2: matrix merge, one job per bin --
-    MATRIX_MERGE(ch_bins_ready, file(params.accessions_file))
+    MATRIX_MERGE(ch_bins_ready, file(accessions_file))
 }
