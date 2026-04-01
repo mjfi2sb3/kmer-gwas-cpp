@@ -13,8 +13,8 @@ process MATRIX_MERGE {
     script:
     """
     g++ -std=c++17 -O3 -march=native -pthread -o matrix_merge \
-        ${projectDir}/src/matrix_merge.cpp \
-        ${projectDir}/src/mmap_io.cpp
+        /opt/kmer-gwas/src/matrix_merge.cpp \
+        /opt/kmer-gwas/src/mmap_io.cpp
 
     ./matrix_merge \\
         --input      ${kmer_count_root}/ \\

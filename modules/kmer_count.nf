@@ -12,8 +12,8 @@ process KMER_COUNT {
     script:
     """
     g++ -std=c++17 -O3 -march=native -pthread -o kmer_count \
-        ${projectDir}/src/kmer_count_v3.cpp \
-        ${projectDir}/src/mmap_io.cpp -lz
+        /opt/kmer-gwas/src/kmer_count_v3.cpp \
+        /opt/kmer-gwas/src/mmap_io.cpp -lz
 
     # Locate R1 — try common extensions in order
     R1=""
