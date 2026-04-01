@@ -5,6 +5,7 @@ process KMER_COUNT {
     input:
         val accession
         val num_bins
+        val data_dir
 
     output:
         tuple val(accession), path("${accession}"), emit: accession_dir
@@ -18,18 +19,18 @@ process KMER_COUNT {
     # Locate R1 — try common extensions in order
     R1=""
     for ext in _1.fq _1.fastq _1.fq.gz _1.fastq.gz; do
-        candidate="${params.data_dir}/${accession}\${ext}"
+        candidate="${data_dir}/${accession}\${ext}"
         if [ -f "\${candidate}" ]; then R1="\${candidate}"; break; fi
     done
-    [ -z "\$R1" ] && { echo "ERROR: no R1 file found for ${accession} in ${params.data_dir}" >&2; exit 1; }
+    [ -z "\$R1" ] && { echo "ERROR: no R1 file found for ${accession} in ${data_dir}" >&2; exit 1; }
 
     # Locate R2
     R2=""
     for ext in _2.fq _2.fastq _2.fq.gz _2.fastq.gz; do
-        candidate="${params.data_dir}/${accession}\${ext}"
+        candidate="${data_dir}/${accession}\${ext}"
         if [ -f "\${candidate}" ]; then R2="\${candidate}"; break; fi
     done
-    [ -z "\$R2" ] && { echo "ERROR: no R2 file found for ${accession} in ${params.data_dir}" >&2; exit 1; }
+    [ -z "\$R2" ] && { echo "ERROR: no R2 file found for ${accession} in ${data_dir}" >&2; exit 1; }
 
     ./kmer_count ${accession} ${num_bins} ./ "\$R1" "\$R2"
     """

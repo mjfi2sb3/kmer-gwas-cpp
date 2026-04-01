@@ -41,21 +41,18 @@ if (params.help) {
     exit 0
 }
 
-// Resolve data_dir to an absolute path so relative inputs (e.g. ./data)
-// work correctly inside Singularity containers and SLURM work directories
-params.data_dir = file(params.data_dir).toAbsolutePath().toString()
 
 // ---------------------------------------------------------------------------
 // Parameter summary
 // ---------------------------------------------------------------------------
-def paramSummary() {
+def paramSummary(String data_dir) {
     log.info """
     =========================================
      k m e r - G W A S  p i p e l i n e
     =========================================
     Input
       accessions_file        : ${params.accessions_file}
-      data_dir               : ${params.data_dir}
+      data_dir               : ${data_dir}
     Pipeline
       num_bins               : ${params.num_bins}
       threshold              : ${params.threshold}
@@ -74,8 +71,6 @@ def paramSummary() {
 // ---------------------------------------------------------------------------
 workflow {
 
-    paramSummary()
-
     // -- Bin estimation hint (informational only; does not override num_bins) --
     //estimateBins(
     //    params.genome_size,
@@ -85,6 +80,12 @@ workflow {
     //    params.num_bins
     //)
 
+    // Resolve data_dir to absolute path — relative inputs (e.g. ./data) break
+    // inside Singularity containers and SLURM work directories
+    def data_dir = file(params.data_dir).toAbsolutePath().toString()
+
+    paramSummary(data_dir)
+
     // -- Stage 1: k-mer counting, one job per accession --
     ch_accessions = Channel
         .fromPath(params.accessions_file)
@@ -92,7 +93,7 @@ workflow {
         .map { it.trim() }
         .filter { it }                  // skip blank lines
 
-    KMER_COUNT(ch_accessions, params.num_bins)
+    KMER_COUNT(ch_accessions, params.num_bins, data_dir)
 
     // -- Fan-in: wait for ALL accessions, then fire once per bin --
     //
