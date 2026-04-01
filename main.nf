@@ -27,11 +27,12 @@ def helpMessage() {
         --matrix_merge_cpus Number of threads for matrix_merge                 [default: ${params.matrix_merge_cpus}]
 
     Profiles:
-        -profile standard   Run locally
-        -profile slurm      Submit jobs to SLURM (account k1616, partition workq)
+        -profile standard           Run locally
+        -profile slurm              Submit jobs to SLURM (module-system environment)
+        -profile slurm_container    Submit jobs to SLURM using Singularity container (recommended)
 
     Example:
-        nextflow run main.nf -profile slurm --accessions_file samples.txt --data_dir /path/to/fastq
+        nextflow run main.nf -profile slurm_container --accessions_file samples.txt --data_dir /path/to/fastq
     """.stripIndent()
 }
 
@@ -40,24 +41,9 @@ if (params.help) {
     exit 0
 }
 
-// ---------------------------------------------------------------------------
-// GCC version check (runs on login node — early warning only)
-// ---------------------------------------------------------------------------
-def checkGcc(int minMajor) {
-    def proc = ['bash', '-c', 'g++ -dumpversion 2>/dev/null || echo ""'].execute()
-    proc.waitFor()
-    def version = proc.text.trim()
-    if (!version) {
-        log.warn "WARNING: g++ not found on PATH. Processes will attempt 'module load gcc/12.2.0' before compiling."
-        return
-    }
-    int major = version.split('\\.')[0].toInteger()
-    if (major < minMajor) {
-        log.warn "WARNING: g++ ${version} found but >= ${minMajor} required. Processes will attempt 'module load gcc/12.2.0'."
-    } else {
-        log.info "g++ ${version} detected (>= ${minMajor} required) ✔"
-    }
-}
+// Resolve data_dir to an absolute path so relative inputs (e.g. ./data)
+// work correctly inside Singularity containers and SLURM work directories
+params.data_dir = file(params.data_dir).toAbsolutePath().toString()
 
 // ---------------------------------------------------------------------------
 // Parameter summary
@@ -89,7 +75,6 @@ def paramSummary() {
 workflow {
 
     paramSummary()
-    checkGcc(9)
 
     // -- Bin estimation hint (informational only; does not override num_bins) --
     //estimateBins(
