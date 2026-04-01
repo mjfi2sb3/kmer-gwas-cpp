@@ -25,6 +25,8 @@ def helpMessage() {
         --delimiter         Column delimiter: 'tab' or 'none'                  [default: ${params.delimiter}]
         --core              'y' = write core k-mers file, 'n' = skip           [default: ${params.core}]
         --matrix_merge_cpus Number of threads for matrix_merge                 [default: ${params.matrix_merge_cpus}]
+        --clusterOptions    Extra SLURM options passed to all jobs              [default: none]
+                            e.g. --clusterOptions '--account=myproject --partition=highmem'
 
     Profiles:
         -profile standard           Run locally
@@ -65,6 +67,7 @@ def paramSummary(String accessions_file, String data_dir) {
       delimiter              : ${c_val}${params.delimiter}${c_reset}
       core                   : ${c_val}${params.core}${c_reset}
       matrix_merge_cpus      : ${c_val}${params.matrix_merge_cpus}${c_reset}
+      clusterOptions         : ${c_val}${params.clusterOptions ?: '(none)'}${c_reset}
     ${c_head}Output${c_reset}
       output_dir             : ${c_val}${params.output_dir}${c_reset}
     ${c_banner}-----------------------------------------${c_reset}
