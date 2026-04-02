@@ -27,7 +27,11 @@ def helpMessage() {
         --matrix_merge_cpus Number of threads for matrix_merge                 [default: ${params.matrix_merge_cpus}]
         --clusterOptions         Extra SLURM options passed to all jobs         [default: none]
                                  Use = syntax: --clusterOptions='--account=myproject --partition=highmem'
-        --singularity_cache_dir  Local path for Singularity image cache        [default: ~/singularity_cache]
+        --singularity_cache_dir  Local path for Singularity image cache        [default: .singularity/]
+        --large_cohort           Inode-saving mode for large cohorts (>1000    [default: false]
+                                 accessions): packs bin files into per-accession
+                                 tarballs, uses move instead of copy for publishDir,
+                                 and auto-cleans work dirs on completion
 
     Profiles:
         -profile standard           Run locally
@@ -70,6 +74,7 @@ def paramSummary(String accessions_file, String data_dir) {
       matrix_merge_cpus      : ${c_val}${params.matrix_merge_cpus}${c_reset}
       clusterOptions         : ${c_val}${params.clusterOptions ?: '(none)'}${c_reset}
       singularity_cache_dir  : ${c_val}${params.singularity_cache_dir}${c_reset}
+      large_cohort           : ${c_val}${params.large_cohort}${c_reset}
     ${c_head}Output${c_reset}
       output_dir             : ${c_val}${params.output_dir}${c_reset}
     ${c_banner}-----------------------------------------${c_reset}
