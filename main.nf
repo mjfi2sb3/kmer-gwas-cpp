@@ -26,7 +26,7 @@ def helpMessage() {
         --core              'y' = write core k-mers file, 'n' = skip           [default: ${params.core}]
         --matrix_merge_cpus Number of threads for matrix_merge                 [default: ${params.matrix_merge_cpus}]
         --clusterOptions    Extra SLURM options passed to all jobs              [default: none]
-                            e.g. --clusterOptions '--account=myproject --partition=highmem'
+                            Use = syntax: --clusterOptions='--account=myproject --partition=highmem'
 
     Profiles:
         -profile standard           Run locally
