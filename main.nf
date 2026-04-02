@@ -28,10 +28,9 @@ def helpMessage() {
         --clusterOptions         Extra SLURM options passed to all jobs         [default: none]
                                  Use = syntax: --clusterOptions='--account=myproject --partition=highmem'
         --singularity_cache_dir  Local path for Singularity image cache        [default: .singularity/]
-        --large_cohort           Inode-saving mode for large cohorts (>1000    [default: false]
-                                 accessions): packs bin files into per-accession
-                                 tarballs, uses move instead of copy for publishDir,
-                                 and auto-cleans work dirs on completion
+        --cleanup                Delete work dirs for successful tasks on        [default: true]
+                                 completion. Disable with --cleanup false to
+                                 preserve work dirs for debugging or resume.
 
     Profiles:
         -profile standard           Run locally
@@ -74,7 +73,7 @@ def paramSummary(String accessions_file, String data_dir) {
       matrix_merge_cpus      : ${c_val}${params.matrix_merge_cpus}${c_reset}
       clusterOptions         : ${c_val}${params.clusterOptions ?: '(none)'}${c_reset}
       singularity_cache_dir  : ${c_val}${params.singularity_cache_dir}${c_reset}
-      large_cohort           : ${c_val}${params.large_cohort}${c_reset}
+      cleanup                : ${c_val}${params.cleanup}${c_reset}
     ${c_head}Output${c_reset}
       output_dir             : ${c_val}${params.output_dir}${c_reset}
     ${c_banner}-----------------------------------------${c_reset}
@@ -85,6 +84,11 @@ def paramSummary(String accessions_file, String data_dir) {
 // Completion summary
 // ---------------------------------------------------------------------------
 workflow.onComplete {
+    if (workflow.success && params.cleanup) {
+        file(workflow.workDir).deleteDir()
+        log.info "Cleaned up work directory: ${workflow.workDir}"
+    }
+
     def c_reset  = "\033[0m"
     def c_banner = workflow.success ? "\033[1;36m" : "\033[1;31m"  // bold cyan or bold red
     def c_head   = "\033[1;33m"                                     // bold yellow

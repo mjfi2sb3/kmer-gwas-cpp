@@ -7,28 +7,23 @@ process MATRIX_MERGE {
         val accessions_file
 
     output:
-        path "matrix_*/${bin_idx}_matrix.tsv", emit: matrix_file
-        path "matrix_*/${bin_idx}_core.txt",   emit: core_file, optional: true
+        path "matrix_*/${bin_idx}_matrix.tsv.gz", emit: matrix_file
+        path "matrix_*/${bin_idx}_core.txt.gz",   emit: core_file, optional: true
 
     script:
-    def extract = params.large_cohort ? """
-        mkdir -p extracted/
-        for tarball in ${kmer_count_root}/*.tar; do
-            acc=\$(basename "\${tarball}" .tar)
-            tar -xf "\${tarball}" "\${acc}/${bin_idx}_nr.bin" -C extracted/ 2>/dev/null || true
-        done
-    """ : ""
-    def input_dir = params.large_cohort ? "extracted/" : "${kmer_count_root}/"
-    def cleanup   = params.large_cohort ? "rm -rf extracted/" : ""
     """
     g++ -std=c++17 -O3 -march=native -pthread -o matrix_merge \
         /opt/kmer-gwas/src/matrix_merge.cpp \
         /opt/kmer-gwas/src/mmap_io.cpp
 
-    ${extract}
+    mkdir -p extracted/
+    for tarball in ${kmer_count_root}/*.tar; do
+        acc=\$(basename "\${tarball}" .tar)
+        tar -xf "\${tarball}" -C extracted/ "\${acc}/${bin_idx}_nr.bin" 2>/dev/null || true
+    done
 
     ./matrix_merge \\
-        --input      ${input_dir} \\
+        --input      extracted/ \\
         --accessions ${accessions_file} \\
         --index      ${bin_idx} \\
         --threshold  ${params.threshold} \\
@@ -38,6 +33,14 @@ process MATRIX_MERGE {
         --bins       ${params.num_bins} \\
         --threads    ${task.cpus}
 
-    ${cleanup}
+    rm -rf extracted/
+
+    if command -v pigz > /dev/null 2>&1; then
+        pigz -p ${task.cpus} matrix_*/${bin_idx}_matrix.tsv
+        pigz -p ${task.cpus} matrix_*/${bin_idx}_core.txt 2>/dev/null || true
+    else
+        gzip matrix_*/${bin_idx}_matrix.tsv
+        gzip matrix_*/${bin_idx}_core.txt 2>/dev/null || true
+    fi
     """
 }
