@@ -25,8 +25,9 @@ def helpMessage() {
         --delimiter         Column delimiter: 'tab' or 'none'                  [default: ${params.delimiter}]
         --core              'y' = write core k-mers file, 'n' = skip           [default: ${params.core}]
         --matrix_merge_cpus Number of threads for matrix_merge                 [default: ${params.matrix_merge_cpus}]
-        --clusterOptions    Extra SLURM options passed to all jobs              [default: none]
-                            Use = syntax: --clusterOptions='--account=myproject --partition=highmem'
+        --clusterOptions         Extra SLURM options passed to all jobs         [default: none]
+                                 Use = syntax: --clusterOptions='--account=myproject --partition=highmem'
+        --singularity_cache_dir  Local path for Singularity image cache        [default: ~/singularity_cache]
 
     Profiles:
         -profile standard           Run locally
@@ -68,6 +69,7 @@ def paramSummary(String accessions_file, String data_dir) {
       core                   : ${c_val}${params.core}${c_reset}
       matrix_merge_cpus      : ${c_val}${params.matrix_merge_cpus}${c_reset}
       clusterOptions         : ${c_val}${params.clusterOptions ?: '(none)'}${c_reset}
+      singularity_cache_dir  : ${c_val}${params.singularity_cache_dir}${c_reset}
     ${c_head}Output${c_reset}
       output_dir             : ${c_val}${params.output_dir}${c_reset}
     ${c_banner}-----------------------------------------${c_reset}
