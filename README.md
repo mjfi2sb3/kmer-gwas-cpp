@@ -8,17 +8,17 @@ A high-performance Nextflow pipeline for genome-wide association studies (GWAS) 
 
 The pipeline processes paired-end FASTQ files (plain or gzip-compressed) and produces a binary k-mer matrix across all accessions. It runs in two stages:
 
-1. **KMER_COUNT** — one SLURM job per accession. Reads paired-end FASTQ files, extracts canonical 51-mers, writes per-accession k-mer bin files (`*_nr.bin`), and packages them into a single tar archive.
-2. **MATRIX_MERGE** — one SLURM job per bin. Extracts the relevant bin from each tar archive, merges bin files across all accessions into a tabular matrix file, applies count thresholds and output format options, and compresses the result with pigz.
+1. **KMER_COUNT**: one SLURM job per accession. Reads paired-end FASTQ files, extracts canonical 51-mers, writes per-accession k-mer bin files (`*_nr.bin`), and packages them into a single tar archive.
+2. **MATRIX_MERGE**: one SLURM job per bin. Extracts the relevant bin from each tar archive, merges bin files across all accessions into a tabular matrix file, applies count thresholds and output format options, and compresses the result with pigz.
 
 ### Key features
 
-- Streams gzip-compressed FASTQ directly via zlib — no temporary decompressed files on the shared filesystem
+- Streams gzip-compressed FASTQ directly via zlib; no temporary decompressed files on the shared filesystem
 - Compiles C++ binaries at runtime with `-march=native`, targeting the actual node CPU for optimal performance
 - Fully containerised: the build toolchain (GCC 12, zlib-dev, pigz) is embedded in the image; source code is compiled fresh on each job
-- Works across HPC systems — no hardcoded paths or site-specific module dependencies
+- Works across HPC systems; no hardcoded paths or site-specific module dependencies
 - Supports presence/absence or raw count output, configurable thresholds, and core k-mer extraction
-- Inode-efficient: bin files are packaged into per-accession tar archives; MATRIX_MERGE extracts only the needed bin — scales to 20,000+ accessions without exhausting filesystem inodes
+- Inode-efficient: bin files are packaged into per-accession tar archives; MATRIX_MERGE extracts only the needed bin; scales to thousands of accessions.
 - Compressed output: matrix files are compressed with pigz (parallel gzip) if available, otherwise standard gzip
 
 ---
@@ -31,7 +31,7 @@ The pipeline processes paired-end FASTQ files (plain or gzip-compressed) and pro
 | Singularity / Apptainer | any |
 | SLURM     | any            |
 
-No compiler or zlib installation is required on compute nodes when using the `slurm_container` profile — everything is provided by the container image.
+No compiler or zlib installation is required on compute nodes when using the `slurm_container` profile; everything is provided by the container image.
 
 ---
 
@@ -48,14 +48,20 @@ cp accessions.txt.example accessions.txt
 
 # 3. Place paired FASTQ files in a data directory
 #    Supported naming: <accession>_1.fq, _1.fastq, _1.fq.gz, _1.fastq.gz  (and _2.*)
-mkdir -p data
-cp /path/to/fastqs/*.fastq.gz data/
+ls -d /path/to/fastqs/*.fastq.gz
 
-# 4. Run on SLURM with Singularity (recommended)
+# 4. Load needed modules
+# Or Install nextflow and Singularity
+module load nextflow singularity;
+
+# 5. Print Help
+nextflow run main.nf --help
+
+# 6. Run on SLURM with Singularity (recommended)
 nextflow run main.nf \
     -profile slurm_container \
     --accessions_file accessions.txt \
-    --data_dir ./data
+    --data_dir /path/to/fastqs/
 ```
 
 Results are written to `./results/` by default.
@@ -118,6 +124,10 @@ results/
 | `--delimiter` | `tab` | Matrix column delimiter: `tab` or `none` |
 | `--core` | `n` | `y` = write core k-mers file per bin |
 | `--matrix_merge_cpus` | `32` | Threads for the MATRIX_MERGE stage |
+| `--kmer_count_memory` | `370.GB` | RAM per KMER_COUNT job. Use dot notation: `120.GB`, `370.GB`. Use `--clusterOptions='--mem=0'` to request all available node RAM instead |
+| `--matrix_merge_memory` | `370.GB` | RAM per MATRIX_MERGE job. Use dot notation: `64.GB`, `120.GB`, `370.GB` |
+| `--kmer_count_time` | `5h` | Wallclock time limit per KMER_COUNT job. Examples: `'2h'`, `'5h'`, `'1d'`, `'2h 30m'` |
+| `--matrix_merge_time` | `10h` | Wallclock time limit per MATRIX_MERGE job. Examples: `'5h'`, `'10h'`, `'1d'`, `'2h 30m'` |
 | `--cleanup` | `true` | Delete Nextflow work directory on successful completion. Pass `--cleanup false` to preserve work dirs for debugging or `-resume` |
 | `--clusterOptions` | _(none)_ | Extra SLURM flags passed to every job (see note below) |
 | `--singularity_cache_dir` | `./.singularity` | Local path for Singularity image cache |
@@ -154,8 +164,8 @@ nextflow run main.nf \
 
 | Stage | CPUs | Memory | Time |
 |-------|------|--------|------|
-| KMER_COUNT | 32 | 128 GB | 8 h |
-| MATRIX_MERGE | 32 (configurable) | 64 GB | 5 h |
+| KMER_COUNT | 32 (fixed) | 370.GB (`--kmer_count_memory`) | 5h (`--kmer_count_time`) |
+| MATRIX_MERGE | 32 (`--matrix_merge_cpus`) | 370.GB (`--matrix_merge_memory`) | 10h (`--matrix_merge_time`) |
 
 The container image is pulled automatically on first run and cached in `.singularity/` under the launch directory. Override the cache location with `--singularity_cache_dir /path/to/cache` (useful for sharing the cache across multiple runs).
 
@@ -178,7 +188,7 @@ Runs locally using all available CPUs (up to 64). Useful for small-scale testing
 nextflow run main.nf \
     -profile standard \
     --accessions_file accessions.txt \
-    --data_dir ./data \
+    --data_dir /path/to/fastqs/ \
     --num_bins 5
 ```
 
@@ -189,7 +199,7 @@ nextflow run main.nf \
 The pipeline image is available on the GitHub Container Registry:
 
 ```
-ghcr.io/mjfi2sb3/kmer-gwas-cpp:v2.4.2
+ghcr.io/mjfi2sb3/kmer-gwas-cpp:v2.5.0
 ```
 
 The image provides GCC 12, zlib-dev, pigz, and the pipeline source code at `/opt/kmer-gwas/src/`. Binaries are compiled at job start with `-march=native` so they are optimised for the actual compute node CPU. The image does not contain pre-compiled binaries. pigz is used for parallel gzip compression of matrix output files; if pigz is unavailable (e.g. on older images or the `slurm` profile with a host that lacks pigz), standard gzip is used as a fallback.
@@ -197,8 +207,8 @@ The image provides GCC 12, zlib-dev, pigz, and the pipeline source code at `/opt
 ### Pulling the image manually
 
 ```bash
-singularity pull kmer-gwas-cpp_v2.4.2.sif \
-    docker://ghcr.io/mjfi2sb3/kmer-gwas-cpp:v2.4.2
+singularity pull kmer-gwas-cpp_v2.5.0.sif \
+    docker://ghcr.io/mjfi2sb3/kmer-gwas-cpp:v2.5.0
 ```
 
 ### Rebuilding the image
@@ -251,7 +261,7 @@ The first matching file per read pair is used. If no file is found for an access
 
 ## Tips
 
-**Estimating `--num_bins`**
+**Estimating `--num_bins` - Under Development**
 
 A higher bin count reduces memory per `MATRIX_MERGE` job but increases job count. A rough starting point:
 
@@ -261,7 +271,7 @@ num_bins ≈ (num_accessions × genome_size_bp × coverage × 8 bytes) / availab
 
 **Resuming a run**
 
-Nextflow caches completed work in the `work/` directory. Resume an interrupted run with:
+Nextflow caches completed work in the `work/` directory. The default configuration is to remove cache and finished tasks to save on storage and inodes. Resume an interrupted run with the command below given that the previous run was executed with `--cleanup true`:
 
 ```bash
 nextflow run main.nf -profile slurm_container -resume \
@@ -269,9 +279,10 @@ nextflow run main.nf -profile slurm_container -resume \
     --data_dir /path/to/fastq
 ```
 
+
 **Large cohorts (inode management)**
 
-The pipeline is designed to handle 20,000+ accessions without exhausting filesystem inode limits. KMER_COUNT packages all bin files for each accession into a single tar archive (`<accession>.tar`); MATRIX_MERGE extracts only the one bin it needs from each archive. Work directories are removed on successful completion (`--cleanup true`, the default), further reducing inode usage.
+A large number of files is generated by the workflow for large number of accessions. To manage this as efficient as possible, KMER_COUNT packages all bin files for each accession into a single tar archive (`<accession>.tar`); MATRIX_MERGE extracts only the one bin it needs from each archive. Work directories are removed on successful completion (`--cleanup true`, the default), further reducing inode usage.
 
 To preserve work directories for debugging or `-resume`, pass `--cleanup false`.
 

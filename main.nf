@@ -16,21 +16,29 @@ def helpMessage() {
         nextflow run main.nf [options]
 
     Options:
-        --accessions_file   Path to file listing accession IDs, one per line  [default: ${params.accessions_file}]
-        --data_dir          Directory containing paired FASTQ files            [default: ${params.data_dir}]
-        --output_dir        Output directory                                   [default: ${params.output_dir}]
-        --num_bins          Number of k-mer bins                               [default: ${params.num_bins}]
-        --threshold         Minimum count threshold for k-mer inclusion        [default: ${params.threshold}]
-        --count             'y' = counts, 'n' = presence/absence               [default: ${params.count}]
-        --delimiter         Column delimiter: 'tab' or 'none'                  [default: ${params.delimiter}]
-        --core              'y' = write core k-mers file, 'n' = skip           [default: ${params.core}]
-        --matrix_merge_cpus Number of threads for matrix_merge                 [default: ${params.matrix_merge_cpus}]
-        --clusterOptions         Extra SLURM options passed to all jobs         [default: none]
+        --accessions_file        Path to file listing accession IDs, one per line   [default: ${params.accessions_file}]
+        --data_dir               Directory containing paired FASTQ files            [default: ${params.data_dir}]
+        --output_dir             Output directory                                   [default: ${params.output_dir}]
+        --num_bins               Number of k-mer bins                               [default: ${params.num_bins}]
+        --threshold              Minimum count threshold for k-mer inclusion        [default: ${params.threshold}]
+        --count                  'y' = counts, 'n' = presence/absence               [default: ${params.count}]
+        --delimiter              Column delimiter: 'tab' or 'none'                  [default: ${params.delimiter}]
+        --core                   'y' = write core k-mers file, 'n' = skip           [default: ${params.core}]
+        --matrix_merge_cpus      Number of threads for MATRIX_MERGE                 [default: ${params.matrix_merge_cpus}]
+        --kmer_count_memory      RAM per KMER_COUNT job                             [default: 370.GB]
+        --matrix_merge_memory    RAM per MATRIX_MERGE job                           [default: 370.GB]
+                                 Use dot notation: 64.MB, 120.GB, 370.GB
+                                 (NOT '120 GB' — the space form fails on the CLI)
+        --kmer_count_time        Wallclock time limit for KMER_COUNT                [default: ${params.kmer_count_time}]
+        --matrix_merge_time      Wallclock time limit for MATRIX_MERGE              [default: ${params.matrix_merge_time}]
+                                 Use quoted string: '5h', '10h', '1d', '2h 30m'
+        --clusterOptions         Extra SLURM options passed to all jobs             [default: none]
                                  Use = syntax: --clusterOptions='--account=myproject --partition=highmem'
-        --singularity_cache_dir  Local path for Singularity image cache        [default: .singularity/]
-        --cleanup                Delete work dirs for successful tasks on        [default: true]
-                                 completion. Disable with --cleanup false to
-                                 preserve work dirs for debugging or resume.
+                                 To request all node RAM: --clusterOptions='--account=k10226 --mem=0'
+                                 (--mem=0 takes precedence over --kmer_count_memory/--matrix_merge_memory)
+        --singularity_cache_dir  Local path for Singularity image cache             [default: .singularity/]
+        --cleanup                Delete work dirs on successful completion           [default: true]
+                                 Disable with --cleanup false to preserve work dirs for debugging or resume.
 
     Profiles:
         -profile standard           Run locally
@@ -71,6 +79,10 @@ def paramSummary(String accessions_file, String data_dir) {
       delimiter              : ${c_val}${params.delimiter}${c_reset}
       core                   : ${c_val}${params.core}${c_reset}
       matrix_merge_cpus      : ${c_val}${params.matrix_merge_cpus}${c_reset}
+      kmer_count_memory      : ${c_val}${params.kmer_count_memory.toGiga()}.GB${c_reset}
+      matrix_merge_memory    : ${c_val}${params.matrix_merge_memory.toGiga()}.GB${c_reset}
+      kmer_count_time        : ${c_val}${params.kmer_count_time}${c_reset}
+      matrix_merge_time      : ${c_val}${params.matrix_merge_time}${c_reset}
       clusterOptions         : ${c_val}${params.clusterOptions ?: '(none)'}${c_reset}
       singularity_cache_dir  : ${c_val}${params.singularity_cache_dir}${c_reset}
       cleanup                : ${c_val}${params.cleanup}${c_reset}
