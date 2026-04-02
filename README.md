@@ -116,6 +116,13 @@ results/
 | `--delimiter` | `tab` | Matrix column delimiter: `tab` or `none` |
 | `--core` | `n` | `y` = write core k-mers file per bin |
 | `--matrix_merge_cpus` | `32` | Threads for the MATRIX_MERGE stage |
+| `--clusterOptions` | _(none)_ | Extra SLURM flags passed to every job (see note below) |
+| `--singularity_cache_dir` | `./.singularity` | Local path for Singularity image cache |
+
+> **`--clusterOptions` syntax:** because the value starts with `--`, you must use the `=` form to prevent Nextflow misinterpreting it as a flag:
+> ```bash
+> --clusterOptions='--account=myproject --partition=highmem'
+> ```
 
 ---
 
@@ -132,12 +139,22 @@ nextflow run main.nf \
     --data_dir /path/to/fastq
 ```
 
+On HPC systems that require a project account or specific partition:
+
+```bash
+nextflow run main.nf \
+    -profile slurm_container \
+    --accessions_file accessions.txt \
+    --data_dir /path/to/fastq \
+    --clusterOptions='--account=myproject --partition=highmem'
+```
+
 | Stage | CPUs | Memory | Time |
 |-------|------|--------|------|
 | KMER_COUNT | 32 | 128 GB | 8 h |
 | MATRIX_MERGE | 32 (configurable) | 64 GB | 5 h |
 
-The container image is pulled automatically and cached in `$HOME/singularity_cache` on first run.
+The container image is pulled automatically on first run and cached in `.singularity/` under the launch directory. Override the cache location with `--singularity_cache_dir /path/to/cache` (useful for sharing the cache across multiple runs).
 
 ### `slurm`
 
