@@ -4,6 +4,41 @@ All notable changes to this pipeline are documented here.
 Versions follow [semantic versioning](https://semver.org): the major number is
 bumped when output or interfaces change in a backwards-incompatible way.
 
+## v3.1.0
+
+Separates the matrix *encoding* from the value *delimiter*, adds a converter for
+the bit-packed format, and makes the default output the most compact text form.
+
+### Breaking changes
+
+- **`--delimiter bits` is removed; use `--encoding bits`.** In v3.0.0 the
+  bit-packed format was a value of `--delimiter`, which was a category error —
+  it is an encoding, not a separator. `--delimiter bits` now errors with a
+  pointer to `--encoding bits`. The output of `--encoding bits` is byte-identical
+  to v3.0.0's `--delimiter bits`, so only the flag name changed.
+- **The default matrix format changed** from tab-delimited to the compact form
+  `--encoding text --count n --delimiter none`, i.e. rows like `KMER<TAB>101`.
+  Pass `--delimiter tab` for the previous default.
+
+### Added
+
+- **`--encoding text|bits`** — selects how the value vector is serialised,
+  independent of `--delimiter` and `--count`.
+- **`--delimiter space`** — space-separated values, alongside `tab` and `none`.
+- **`tools/bits_to_text.py`** — expand a `bits` matrix back to text (gzip-aware,
+  optional accession-name header). Output is byte-identical to a natively
+  written text matrix.
+- The `matrix_merge` `--help`, `main.nf --help`, and the README now include the
+  full `--encoding` × `--count` × `--delimiter` combination table.
+
+### Changed
+
+- Both illegal output combinations (`--encoding bits --count y` and
+  `--delimiter none --count y`) are validated at launch in `main.nf`, not only
+  in the binary, so a bad request fails immediately rather than in every job.
+- A `manifest{}` block records the pipeline version; it appears in
+  `run_manifest.txt`.
+
 ## v3.0.0
 
 Bounded-memory redesign of the counting and merging stages, plus the
