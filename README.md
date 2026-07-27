@@ -27,9 +27,9 @@ many distinct k-mers the panel contained, i.e. with genetic diversity. The usual
 workaround was to raise `num_bins` so each bin held less — which leads to the
 second problem.
 
-**File count.** Stage 1 created a directory tree per accession: one directory and
-two files for every bin, so at 1500 bins that was ~4,500 filesystem entries per
-accession, all written and then read back to be deduplicated. Stage 2 then
+**File count (inodes).** Stage 1 created a directory tree per accession: one directory and
+two files for every bin, so at 1500 bins that was ~4,500 filesystem entries
+(inodes) per accession, all written and then read back to be deduplicated. Stage 2 then
 extracted one file per accession out of each tar archive before merging, creating
 two entries per accession per bin job, live simultaneously across every running
 job. On a shared HPC filesystem with an inode quota this is often the binding
@@ -66,8 +66,8 @@ Validated on real rice data against the previous implementation:
 |---|---|---|
 | Stage 1 peak memory | 57.1 GB, grows with input size | **27.6 GB, set by a budget** |
 | Stage 2 peak memory | 6.4 GB, grows with k-mer diversity | **< 0.1 GB, grows only with accession count** |
-| Stage 1 filesystem entries (1500 bins) | 4,502 per job | **2 per job** |
-| Stage 2 filesystem entries | 25,201 per bin job | **0** |
+| Stage 1 filesystem entries / inodes (1500 bins) | 4,502 per job | **2 per job** |
+| Stage 2 filesystem entries / inodes | 25,201 per bin job | **0** |
 | Intermediate I/O per accession | ~12 GB written, then read back | **none** |
 | k-mer encoder throughput | 1.14 M k-mer/s | **531 M k-mer/s** |
 
