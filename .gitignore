@@ -6,6 +6,10 @@ results/
 
 # Compiled binaries
 build/
+# ... including anything the src/Makefile builds into src/
+src/kmer_count
+src/matrix_merge
+src/bits_to_text
 
 # Data files
 data/

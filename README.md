@@ -285,11 +285,18 @@ silently reused.
 > The matrix usually dwarfs every intermediate file in this pipeline, so this is
 > the single largest lever on total output size.
 >
-> To expand a `bits` matrix back to text, use **`tools/bits_to_text.py`** (it
-> needs the accession count, to strip padding bits):
+> To expand a `bits` matrix back to text, use **`bits_to_text`** (it needs the
+> accession count, to strip padding bits). Two interchangeable versions with
+> identical output — the Python one is zero-setup, the C++ one is ~14× faster
+> for large matrices:
 >
 > ```bash
+> # portable, no build
 > tools/bits_to_text.py -a accessions.txt --delimiter tab \
+>     results/matrix/matrix_*/0_matrix.tsv.gz  0_text.tsv.gz
+>
+> # faster; build with:  make -C src bits_to_text
+> src/bits_to_text -a accessions.txt --delimiter tab \
 >     results/matrix/matrix_*/0_matrix.tsv.gz  0_text.tsv.gz
 > ```
 >

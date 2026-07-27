@@ -20,13 +20,17 @@ BIN     ?= .
 
 HEADERS = kmer_key.hpp pack_io.hpp bin_store.hpp thread_pool.hpp
 
-all: $(BIN)/kmer_count $(BIN)/matrix_merge
+all: $(BIN)/kmer_count $(BIN)/matrix_merge $(BIN)/bits_to_text
 
 $(BIN)/kmer_count: kmer_count_v3.cpp $(HEADERS)
 	$(CXX) $(CXXFLAGS) -o $@ kmer_count_v3.cpp -lz
 
 $(BIN)/matrix_merge: matrix_merge.cpp $(HEADERS)
 	$(CXX) $(CXXFLAGS) -o $@ matrix_merge.cpp
+
+# Standalone; does not depend on k or the key format (a pure text transform).
+$(BIN)/bits_to_text: bits_to_text.cpp
+	$(CXX) $(CXXFLAGS) -o $@ bits_to_text.cpp -lz
 
 # Round-trip one synthetic accession through both stages.
 test: all
