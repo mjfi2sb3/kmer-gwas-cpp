@@ -4,7 +4,6 @@
 #SBATCH --mem=0
 #SBATCH -N 1
 #SBATCH --mail-type=END
-#SBATCH --mail-user=salim.bougouffa@kaust.edu.sa
 
 #DW jobdw type=scratch access_mode=striped capacity=1TiB
 #DW stage_in type=directory source=/scratch/bougous/kmer_gwas destination=$DW_JOB_STRIPED

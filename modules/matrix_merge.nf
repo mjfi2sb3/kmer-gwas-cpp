@@ -1,9 +1,19 @@
+// Stage 2 — build one bin's matrix by k-way merging every accession's pack slice.
+//
+// The previous version extracted `<acc>/<bin>_nr.bin` out of each accession's
+// tar into a local `extracted/` directory: 12,600 directories plus 12,600 files
+// PER bin task, ~5M live inodes at queueSize 200. That step is gone entirely —
+// matrix_merge seeks straight to the bin it needs inside each pack.
+//
+// `kmer_dir` is staged as ONE directory symlink rather than 12,600 individual
+// file inputs. Staging the files individually would cost 12,600 symlinks per
+// bin task, which is worse than what it replaced.
 process MATRIX_MERGE {
     tag "bin_${bin_idx}"
     publishDir "${params.output_dir}/matrix", mode: 'copy', overwrite: true
 
     input:
-        tuple val(bin_idx), val(kmer_count_root)
+        tuple val(bin_idx), path(kmer_dir)
         val accessions_file
 
     output:
@@ -12,18 +22,13 @@ process MATRIX_MERGE {
 
     script:
     """
-    g++ -std=c++17 -O3 -march=native -pthread -o matrix_merge \
-        /opt/kmer-gwas/src/matrix_merge.cpp \
-        /opt/kmer-gwas/src/mmap_io.cpp
-
-    mkdir -p extracted/
-    for tarball in ${kmer_count_root}/*.tar; do
-        acc=\$(basename "\${tarball}" .tar)
-        tar -xf "\${tarball}" -C extracted/ "\${acc}/${bin_idx}_nr.bin" 2>/dev/null || true
-    done
+    # -DKMER_K must match the value KMER_COUNT used. A mismatch is caught at run
+    # time by the pack footer, but building consistently avoids the error.
+    g++ -std=c++17 -O3 -march=native -pthread -DKMER_K=${params.kmer_size} -o matrix_merge \
+        ${params.src_dir}/matrix_merge.cpp
 
     ./matrix_merge \\
-        --input      extracted/ \\
+        --input      ${kmer_dir}/ \\
         --accessions ${accessions_file} \\
         --index      ${bin_idx} \\
         --threshold  ${params.threshold} \\
@@ -32,8 +37,6 @@ process MATRIX_MERGE {
         --core       ${params.core} \\
         --bins       ${params.num_bins} \\
         --threads    ${task.cpus}
-
-    rm -rf extracted/
 
     if command -v pigz > /dev/null 2>&1; then
         pigz -p ${task.cpus} matrix_*/${bin_idx}_matrix.tsv

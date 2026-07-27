@@ -4,9 +4,6 @@ nextflow.enable.dsl = 2
 include { KMER_COUNT   } from './modules/kmer_count'
 include { MATRIX_MERGE } from './modules/matrix_merge'
 
-// Load utility functions (estimateBins)
-//evaluate(new File("${projectDir}/lib/utils.nf"))
-
 // ---------------------------------------------------------------------------
 // Help
 // ---------------------------------------------------------------------------
@@ -19,11 +16,24 @@ def helpMessage() {
         --accessions_file        Path to file listing accession IDs, one per line   [default: ${params.accessions_file}]
         --data_dir               Directory containing paired FASTQ files            [default: ${params.data_dir}]
         --output_dir             Output directory                                   [default: ${params.output_dir}]
-        --num_bins               Number of k-mer bins                               [default: ${params.num_bins}]
-        --threshold              Minimum count threshold for k-mer inclusion        [default: ${params.threshold}]
+        --kmer_size              k-mer length; must be ODD, 15..63                  [default: ${params.kmer_size}]
+                                 k <= 32 uses a compact 10-byte record instead of 18,
+                                 cutting Stage 1 output by ~44%. Compiled in, so there
+                                 is no runtime cost to changing it.
+                                 NOTE: changing k invalidates existing bin files.
+        --num_bins               Number of k-mer bins (parallelism / output size)   [default: ${params.num_bins}]
+        --min_kmer_count         Drop k-mers seen fewer times in an accession       [default: ${params.min_kmer_count}]
+        --threshold              Two-sided MAF filter on accession occurrence      [default: ${params.threshold}]
+                                 Keeps k-mers in [threshold, n_acc - threshold] accessions.
+                                 Filters on HOW MANY ACCESSIONS carry the k-mer, not on
+                                 its count within an accession. 0 disables the filter.
         --count                  'y' = counts, 'n' = presence/absence               [default: ${params.count}]
-        --delimiter              Column delimiter: 'tab' or 'none'                  [default: ${params.delimiter}]
+        --delimiter              Matrix value format: 'tab', 'none' or 'bits'      [default: ${params.delimiter}]
+                                 'bits' packs presence/absence 1 bit per accession as hex:
+                                 ~8x smaller than 'tab' at 12,600 accessions. Excludes --count y.
         --core                   'y' = write core k-mers file, 'n' = skip           [default: ${params.core}]
+                                 Core k-mers (present in ALL accessions) are excluded
+                                 from the matrix — they carry no association signal.
         --matrix_merge_cpus      Number of threads for MATRIX_MERGE                 [default: ${params.matrix_merge_cpus}]
         --kmer_count_memory      RAM per KMER_COUNT job                             [default: 370.GB]
         --matrix_merge_memory    RAM per MATRIX_MERGE job                           [default: 370.GB]
@@ -73,7 +83,9 @@ def paramSummary(String accessions_file, String data_dir) {
       accessions_file        : ${c_val}${accessions_file}${c_reset}
       data_dir               : ${c_val}${data_dir}${c_reset}
     ${c_head}Pipeline${c_reset}
+      kmer_size              : ${c_val}${params.kmer_size}${c_reset}
       num_bins               : ${c_val}${params.num_bins}${c_reset}
+      min_kmer_count         : ${c_val}${params.min_kmer_count}${c_reset}
       threshold              : ${c_val}${params.threshold}${c_reset}
       count                  : ${c_val}${params.count}${c_reset}
       delimiter              : ${c_val}${params.delimiter}${c_reset}
@@ -90,6 +102,44 @@ def paramSummary(String accessions_file, String data_dir) {
       output_dir             : ${c_val}${params.output_dir}${c_reset}
     ${c_banner}-----------------------------------------${c_reset}
     """.stripIndent()
+}
+
+// ---------------------------------------------------------------------------
+// Run manifest
+// ---------------------------------------------------------------------------
+// Records the parameters a results directory was produced with. k in particular
+// is not recoverable from the output files themselves, and reading bin files at
+// the wrong k yields silent nonsense rather than an error — so the manifest is
+// the record of what a given results/ actually contains.
+def writeManifest(String accessions_file, String data_dir, int n_accessions) {
+    def dir = file(params.output_dir)
+    dir.mkdirs()
+    file("${params.output_dir}/run_manifest.txt").text = """\
+        # kmer-GWAS run manifest
+        # Written at launch; describes how this results directory was produced.
+        run_name            = ${workflow.runName}
+        started             = ${workflow.start}
+        nextflow_version    = ${workflow.nextflow.version}
+        pipeline_revision   = ${workflow.revision ?: 'n/a'}
+        commit_id           = ${workflow.commitId ?: 'n/a'}
+        command_line        = ${workflow.commandLine}
+
+        kmer_size           = ${params.kmer_size}
+        num_bins            = ${params.num_bins}
+        min_kmer_count      = ${params.min_kmer_count}
+        threshold           = ${params.threshold}
+        count               = ${params.count}
+        delimiter           = ${params.delimiter}
+        core                = ${params.core}
+
+        accessions_file     = ${accessions_file}
+        n_accessions        = ${n_accessions}
+        data_dir            = ${data_dir}
+        output_dir          = ${params.output_dir}
+
+        # Stage 1 output lives in kmer_count_k${params.kmer_size}/ — bin files store
+        # fixed-width ${params.kmer_size}-mers and cannot be read at any other k.
+        """.stripIndent()
 }
 
 // ---------------------------------------------------------------------------
@@ -131,14 +181,16 @@ workflow.onComplete {
 // ---------------------------------------------------------------------------
 workflow {
 
-    // -- Bin estimation hint (informational only; does not override num_bins) --
-    //estimateBins(
-    //    params.genome_size,
-    //    params.sequencing_depth,
-    //    params.available_ram_per_node,
-    //    /*bytes_per_kmer=*/ 8,
-    //    params.num_bins
-    //)
+
+    // -- Validate k up front -------------------------------------------------
+    // k is compiled in as -DKMER_K, so an invalid value would otherwise surface
+    // as a static_assert failure inside every SLURM job rather than here.
+    // k must be odd (an even k lets a sequence be its own reverse complement,
+    // making the canonical form ambiguous) and fit two 64-bit words.
+    def kmer_size = params.kmer_size as Integer
+    if (kmer_size % 2 == 0 || kmer_size < 15 || kmer_size > 63) {
+        exit 1, "ERROR: --kmer_size must be an ODD number between 15 and 63 (got ${params.kmer_size})"
+    }
 
     // Resolve to absolute paths — relative inputs break inside Singularity
     // containers and SLURM work directories
@@ -146,6 +198,9 @@ workflow {
     def data_dir        = file(params.data_dir).toAbsolutePath().toString()
 
     paramSummary(accessions_file, data_dir)
+
+    def n_accessions = file(accessions_file).readLines().findAll { it.trim() }.size()
+    writeManifest(accessions_file, data_dir, n_accessions)
 
     // -- Stage 1: k-mer counting, one job per accession --
     ch_accessions = Channel
@@ -163,19 +218,26 @@ workflow {
     // accession for every bin_idx; the channel only closes (and each bin
     // fires) once all accessions have completed Stage 1.
     //
-    def kmer_count_root = "${params.output_dir}/kmer_count"
+    // Must match KMER_COUNT's publishDir exactly — k is part of the path so that
+    // a results directory from a previous run at a different k cannot be picked
+    // up silently.
+    def kmer_count_root = "${params.output_dir}/kmer_count_k${params.kmer_size}"
     def n_bins          = params.num_bins as Integer
 
-    ch_bin_signals = KMER_COUNT.out.accession_dir
-        .flatMap { accession, acc_dir ->
+    ch_bin_signals = KMER_COUNT.out.accession_pack
+        .flatMap { accession, pack ->
             (0..<n_bins).collect { bin_idx ->
                 tuple(bin_idx, kmer_count_root)
             }
         }
 
+    // One directory path per bin, not 12,600 file paths: MATRIX_MERGE stages it
+    // as a single symlink. Passing the packs individually through the channel
+    // would cost one symlink per accession per bin task (~2.5M inodes at
+    // queueSize 200), which is worse than the extraction step it replaced.
     ch_bins_ready = ch_bin_signals
         .groupTuple()                           // group by bin_idx; size == num_accessions
-        .map { bin_idx, roots -> tuple(bin_idx, roots[0]) }
+        .map { bin_idx, roots -> tuple(bin_idx, file(roots[0])) }
 
     // -- Stage 2: matrix merge, one job per bin --
     MATRIX_MERGE(ch_bins_ready, file(accessions_file))
