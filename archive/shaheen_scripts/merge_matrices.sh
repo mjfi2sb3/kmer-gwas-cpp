@@ -108,7 +108,7 @@ while [[ $i -le ${TOPINDEX} ]]; do
 	done
         echo "wait;" >> $submitscript
 	# submit job
-	sbatch -Q -J merge_matrix_${i} -A k1616 --mail-type=END --mail-user=bougous@kaust.edu.sa -t 5:00:00 --output=${tmpdir}/slurm-${i}-%j.out ${submitscript}
+	sbatch -Q -J merge_matrix_${i} -A k1616 -t 5:00:00 --output=${tmpdir}/slurm-${i}-%j.out ${submitscript}
 	((i = i + $batch_size))
 done
 echo "JOBS SUBMITTED!!"
