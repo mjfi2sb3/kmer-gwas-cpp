@@ -335,7 +335,25 @@ The pipeline image is available on the GitHub Container Registry:
 ghcr.io/mjfi2sb3/kmer-gwas-cpp:v2.5.0
 ```
 
-The image provides GCC 12, zlib-dev, pigz, and the pipeline source code at `/opt/kmer-gwas/src/`. Binaries are compiled at job start with `-march=native` so they are optimised for the actual compute node CPU. The image does not contain pre-compiled binaries. pigz is used for parallel gzip compression of matrix output files; if pigz is unavailable (e.g. on older images or the `slurm` profile with a host that lacks pigz), standard gzip is used as a fallback.
+**The image is a toolchain, not a copy of the code.** It provides GCC 12,
+zlib-dev and pigz; the C++ sources compiled inside it are the ones in **your
+checkout** (`src/`), which is bind-mounted into the container. Binaries are
+built at job start with `-march=native`, so they are optimised for the actual
+compute node CPU. The image contains no pre-compiled binaries.
+
+This matters for a reason worth stating plainly: the container profile used to
+compile from a copy of the source baked into the image at `/opt/kmer-gwas/src/`.
+That meant the code that actually ran was whatever had been frozen into the
+pinned image tag, so every source change needed a new git tag, a CI image build
+and a pin bump before it took effect — and if any of those lagged, the
+`slurm_container` profile silently ran *different code* from the `standard` and
+`slurm` profiles. Compiling from the checkout removes that possibility. The
+image now only needs rebuilding when the compiler or libraries change, not when
+the pipeline changes.
+
+pigz is used for parallel gzip compression of matrix output files; if pigz is
+unavailable (e.g. on the `slurm` profile with a host that lacks it), standard
+gzip is used as a fallback.
 
 ### Pulling the image manually
 
