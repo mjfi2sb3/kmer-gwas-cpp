@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --mail-user=bougous
+#SBATCH --mail-user=$USER
 #SBATCH --mail-type=END
 #SBATCH --output=slurm_out/AEG4844/slurm-AEG4844--kmer_count-k51-b1500-%j.out 
 #SBATCH -N 1

@@ -4,7 +4,7 @@
 #SBATCH --mem=0
 #SBATCH -N 1
 #SBATCH --mail-type=END
-#SBATCH --mail-user=bougous
+#SBATCH --mail-user=$USER
 
 
 ##acc="AEG0397_k51_c200k_bin500_lustre-hdd"; sbatch -J ${acc} --output=slurm-${acc}-%j.err kmer_gwas_shaheen2_lustre-hdd.sh ${acc} 1000

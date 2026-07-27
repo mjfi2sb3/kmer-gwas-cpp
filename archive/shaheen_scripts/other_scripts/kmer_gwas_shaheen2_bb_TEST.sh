@@ -4,7 +4,7 @@
 #SBATCH --mem=0
 #SBATCH -N 1
 #SBATCH --mail-type=ALL
-#SBATCH --mail-user=bougous
+#SBATCH --mail-user=$USER
 #SBATCH -p debug
 
 #BB create_persistent name=sb_test capacity=300G access=striped type=scratch

@@ -3,7 +3,7 @@
 #SBATCH -A k1616
 #SBATCH -N 1
 #SBATCH --mail-type=FAIL
-#SBATCH --mail-user=bougous
+#SBATCH --mail-user=$USER
 
 #DW jobdw type=scratch access_mode=striped capacity=1TiB
 #DW stage_in type=directory source=/scratch/bougous/kmer_gwas/data destination=$DW_JOB_STRIPED/data

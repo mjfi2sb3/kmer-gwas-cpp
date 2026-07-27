@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --mail-user=bougous
+#SBATCH --mail-user=$USER
 #SBATCH --mail-type=NONE
 #SBATCH --output=slurm-test-32threads-%j.out 
 #SBATCH -N 1
