@@ -6,39 +6,99 @@ A high-performance Nextflow pipeline for genome-wide association studies (GWAS) 
 
 ## What's new
 
-The counting and merging stages have been rewritten so that memory and inode use
-are bounded by configuration rather than by the data. Validated on real rice
-data against the previous implementation: **396.5 million matrix rows, zero
-unexplained differences.**
+### What the pipeline does, in one paragraph
+
+Every accession's sequencing reads are chopped into overlapping *k*-mers —
+substrings of fixed length *k* — and counted. The k-mers are split into `num_bins`
+groups by a hash, so the final table can be built one group at a time in parallel.
+The output is a matrix with one row per distinct k-mer and one column per
+accession, recording which accessions carry it. That matrix is the input to the
+association test.
+
+### The problem this release solves
+
+Two things used to grow with the data instead of staying within limits you set.
+
+**Memory.** Stage 1 read an accession's entire FASTQ into RAM — in roughly three
+copies — before counting anything, so how much memory a job needed was a property
+of the input rather than a number you could choose. Stage 2 then built a hash
+table holding the whole bin's k-mer table at once, so *its* memory grew with how
+many distinct k-mers the panel contained, i.e. with genetic diversity. The usual
+workaround was to raise `num_bins` so each bin held less — which leads to the
+second problem.
+
+**File count.** Stage 1 created a directory tree per accession: one directory and
+two files for every bin, so at 1500 bins that was ~4,500 filesystem entries per
+accession, all written and then read back to be deduplicated. Stage 2 then
+extracted one file per accession out of each tar archive before merging, creating
+two entries per accession per bin job, live simultaneously across every running
+job. On a shared HPC filesystem with an inode quota this is often the binding
+constraint, not disk space — and because the fix for the memory problem was more
+bins, the two problems pulled against each other.
+
+### What changed
+
+**Stage 1 now streams.** Reads are parsed in batches, handed to worker threads,
+and discarded. K-mers accumulate in memory only up to a configurable budget; when
+that budget is reached they are sorted and compacted in place (which reclaims most
+of the space, since a k-mer seen many times collapses to one entry), and only if
+still over budget does anything go to disk. Peak memory is therefore the budget.
+
+**Each accession's output is now a single file.** Instead of a tree of per-bin
+files packed into a tar, Stage 1 writes one `.kbin` "pack" containing every bin
+back to back, with an offset table and a footer. Reading bin *i* is a seek, not a
+scan or an extraction.
+
+**Stage 2 now merges instead of accumulating.** Because each pack's bins are
+stored in sorted order, the matrix can be produced by advancing one cursor per
+accession through a heap — take the smallest k-mer, record which accessions have
+it, emit the row, move on. Only one small buffer per accession is resident, so
+memory depends on how many accessions there are, not on how many distinct k-mers
+they collectively contain. This is what breaks the tie between the two problems
+above: `num_bins` is now purely a parallelism and output-file-size knob.
+
+### Measured effect
+
+Validated on real rice data against the previous implementation:
+**396,551,209 vs 396,551,210 matrix rows, zero unexplained differences.**
 
 | | before | after |
 |---|---|---|
-| `KMER_COUNT` peak memory | 57.1 GB, scales with input | **27.6 GB, capped by a budget** |
-| `MATRIX_MERGE` peak memory | 6.4 GB, scales with k-mer union | **< 0.1 GB, scales with accession count** |
-| `KMER_COUNT` peak inodes (1500 bins) | 4,502 | **2** |
-| `MATRIX_MERGE` inodes per bin job | 25,201 | **0** |
-| intermediate I/O per accession | ~12 GB written and re-read | **none** |
-| k-mer encoder | 1.14 M k-mer/s | **531 M k-mer/s** |
+| Stage 1 peak memory | 57.1 GB, grows with input size | **27.6 GB, set by a budget** |
+| Stage 2 peak memory | 6.4 GB, grows with k-mer diversity | **< 0.1 GB, grows only with accession count** |
+| Stage 1 filesystem entries (1500 bins) | 4,502 per job | **2 per job** |
+| Stage 2 filesystem entries | 25,201 per bin job | **0** |
+| Intermediate I/O per accession | ~12 GB written, then read back | **none** |
+| k-mer encoder throughput | 1.14 M k-mer/s | **531 M k-mer/s** |
 
-Practical consequences:
+### New options
 
-- **Peak memory no longer tracks input size.** The old code held roughly three
-  copies of every read before counting anything; reads are now streamed and
-  k-mer accumulation is capped by a configurable budget.
-- **`--num_bins` no longer has to grow with genome size**, because Stage 2 memory
-  no longer depends on the number of distinct k-mers — and bin count was what
-  drove inode use.
-- **`--kmer_size` is configurable** (odd, 15–63) at no runtime cost. `k ≤ 32`
-  uses a 10-byte record instead of 18, cutting Stage 1 output by ~44%.
-- **`--delimiter bits`** packs presence/absence one bit per accession, ~8×
-  smaller than `tab` at 12,600 accessions.
+- **`--kmer_size`** — *k* is no longer fixed at 51. Any odd value from 15 to 63,
+  compiled in at job start so it costs nothing at run time. Values of 32 or below
+  pack a k-mer into a single 64-bit word, making each record 10 bytes instead of
+  18 and cutting Stage 1 output by ~44%.
+- **`--delimiter bits`** — writes presence/absence as one bit per accession rather
+  than one character. At 12,600 accessions a matrix row shrinks from 25,251 to
+  3,202 bytes, ~8× smaller, encoding exactly the same information.
+- **`--min_kmer_count`** — drop k-mers seen fewer than *n* times within an
+  accession. Low counts are overwhelmingly sequencing errors; this was previously
+  hardcoded.
 
-Two intentional output changes: a spurious second tab after the k-mer column is
-gone, and poly-A k-mers are no longer silently discarded. Everything else is
-identical to the previous implementation.
+### Compatibility
 
-Full measurements, methodology and test coverage: **[docs/BENCHMARKS.md](docs/BENCHMARKS.md)**.
-Reproduce the comparison yourself with `tools/compare_to_baseline.sh`.
+Output is identical to the previous implementation apart from two deliberate
+fixes: a spurious second tab after the k-mer column is gone, and poly-A k-mers
+(`AAA…A`) are no longer silently discarded — the all-zero encoding of poly-A had
+been colliding with the marker used for "this window contained an ambiguous base".
+Anything that parses the matrix should be checked against the new format.
+
+The k-mer length now appears in the output directory names, so results produced at
+different *k* cannot be mixed up. Existing intermediate files from previous runs
+are not readable by the new code and should be regenerated.
+
+Full measurements, methodology and test coverage are in
+**[docs/BENCHMARKS.md](docs/BENCHMARKS.md)**. The comparison is reproducible on
+your own data with `tools/compare_to_baseline.sh`.
 
 ---
 
