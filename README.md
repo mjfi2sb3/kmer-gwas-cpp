@@ -219,6 +219,60 @@ silently reused.
 
 ---
 
+## Converting the bit-packed matrix (`bits_to_text`)
+
+With `--encoding bits` the matrix stores presence/absence as one bit per
+accession, written as hex — about 8× smaller than tab-separated text, but not
+directly readable by tools that expect columns. `bits_to_text` converts between
+the two forms, **both ways**.
+
+Every run compiles a copy to `results/bin/bits_to_text`, so a results directory
+ships with the tool that reads it. A portable Python version,
+`tools/bits_to_text.py`, has the identical interface and output (the C++ one is
+~14× faster on large matrices; build it standalone with `make -C src bits_to_text`).
+
+The accession count is always required — via the accessions file (`-a`, which
+also fixes column order) or `-n N`. It trims padding bits when decoding and
+checks the row width when encoding.
+
+```bash
+# decode: bits -> text  (default)
+results/bin/bits_to_text -a accessions.txt --delimiter tab \
+    results/matrix/matrix_*/0_matrix.tsv.gz  0_text.tsv.gz
+
+# encode: text -> bits  (compress an existing text matrix)
+results/bin/bits_to_text --encode -a accessions.txt --delimiter tab \
+    0_text.tsv.gz  0_bits.tsv.gz
+
+# add an accession-name header row (decode only)
+results/bin/bits_to_text -a accessions.txt --header 0_matrix.tsv.gz  0_text.tsv
+```
+
+**Options**
+
+| flag | meaning |
+|---|---|
+| `--decode` / `--encode` | direction; `--decode` (bits → text) is the default |
+| `-a <file>` / `-n <N>` | accession count (and, with `-a`, column order). Required |
+| `--delimiter tab\|space\|none` | separator of the **text** side, read or written |
+| `--header` | (decode only) prefix a `kmer<TAB>name…` header row; needs `-a` |
+| `[infile] [outfile]` | default stdin/stdout; `-` means the same |
+
+**Compression.** Input gzip is detected automatically (plain or `.gz`, either
+way). Output is gzip-compressed **only when the output filename ends in `.gz`**;
+otherwise it is plain text, and stdout is always plain. For a large matrix,
+prefer a `pigz` pipe — it compresses in parallel, whereas the built-in gzip is
+single-threaded:
+
+```bash
+pigz -dc 0_bits.tsv.gz | results/bin/bits_to_text -n 12600 --delimiter tab | pigz > 0_text.tsv.gz
+```
+
+When encoding, any value other than `0` counts as present, so a raw-count matrix
+(`--count y`) collapses to presence/absence if you pack it to bits.
+
+---
+
 ## Parameters
 
 | Parameter | Default | Description |
@@ -287,26 +341,10 @@ silently reused.
 > The matrix usually dwarfs every intermediate file in this pipeline, so this is
 > the single largest lever on total output size.
 >
-> Use **`bits_to_text`** to convert between the two forms — `--decode` (bits →
-> text, the default) and `--encode` (text → bits, to compress an existing text
-> matrix). It needs the accession count, to strip or check padding bits. Each
-> run publishes a compiled copy to `results/bin/bits_to_text`, so the output
-> directory ships with the tool that reads it:
->
-> ```bash
-> # decode a bits matrix to tab-separated text
-> results/bin/bits_to_text -a accessions.txt --delimiter tab \
->     results/matrix/matrix_*/0_matrix.tsv.gz  0_text.tsv.gz
->
-> # or compress a text matrix to bits
-> results/bin/bits_to_text --encode -a accessions.txt --delimiter tab \
->     0_text.tsv.gz  0_bits.tsv.gz
-> ```
->
-> A portable Python version, `tools/bits_to_text.py`, has the same interface and
-> byte-identical output (the C++ one is ~14× faster for large matrices). Or
-> decode a row by hand: split on the tab, `bytes.fromhex(rest)`, then accession
-> *i* is present if `(bs[i >> 3] >> (i & 7)) & 1`.
+> A `bits` matrix is converted to and from text with **`bits_to_text`** — see
+> [Converting the bit-packed matrix](#converting-the-bit-packed-matrix-bits_to_text).
+> To decode a row by hand: split on the tab, `bytes.fromhex(rest)`, then
+> accession *i* is present if `(bs[i >> 3] >> (i & 7)) & 1`.
 
 > **`--threshold` is a minor-allele-frequency filter, not a count filter.** It is applied to the number of accessions in which a k-mer occurs — *not* to the k-mer's count within an accession. It is two-sided: `--threshold 20` keeps k-mers found in at least 20 accessions **and** in at most `num_accessions - 20`, discarding both rare and near-ubiquitous k-mers, since neither carries usable association signal. The default of `0` disables the filter entirely, on the assumption that downstream analysis applies its own MAF cutoff.
 
@@ -503,16 +541,21 @@ nextflow run main.nf --help
 ├── nextflow.config          # Pipeline parameters and execution profiles
 ├── modules/
 │   ├── kmer_count.nf        # KMER_COUNT process definition
-│   └── matrix_merge.nf      # MATRIX_MERGE process definition
+│   ├── matrix_merge.nf      # MATRIX_MERGE process definition
+│   └── build_tools.nf       # BUILD_TOOLS: compile bits_to_text into results/bin/
 ├── src/
 │   ├── kmer_count_v3.cpp    # Stage 1: streaming k-mer counting -> pack file
 │   ├── matrix_merge.cpp     # Stage 2: k-way merge of pack slices -> matrix
+│   ├── bits_to_text.cpp     # bit-packed <-> text matrix converter (both ways)
 │   ├── kmer_key.hpp         # packed k-mer key + saturating count type
 │   ├── pack_io.hpp          # self-indexed pack file format (reader/writer/validator)
 │   ├── bin_store.hpp        # bounded-memory accumulation with sort/compact/spill
 │   ├── thread_pool.hpp      # thread pool implementation
 │   └── Makefile             # local build (`make`, `make KMER_K=31`, `make test`)
+├── tools/
+│   ├── bits_to_text.py      # portable Python twin of src/bits_to_text.cpp
+│   └── compare_to_baseline.sh  # validate the pipeline against an earlier revision
 ├── Dockerfile               # Container image definition
-├── .gitlab-ci.yml           # CI/CD pipeline (auto-build on tag)
+├── .gitlab-ci.yml           # CI/CD pipeline (auto-build + release on tag)
 └── accessions.txt.example   # Example accessions file
 ```
