@@ -332,7 +332,7 @@ nextflow run main.nf \
 The pipeline image is available on the GitHub Container Registry:
 
 ```
-ghcr.io/mjfi2sb3/kmer-gwas-cpp:v2.5.0
+ghcr.io/mjfi2sb3/kmer-gwas-cpp:v3.0.0
 ```
 
 **The image is a toolchain, not a copy of the code.** It provides GCC 12,
@@ -358,8 +358,8 @@ gzip is used as a fallback.
 ### Pulling the image manually
 
 ```bash
-singularity pull kmer-gwas-cpp_v2.5.0.sif \
-    docker://ghcr.io/mjfi2sb3/kmer-gwas-cpp:v2.5.0
+singularity pull kmer-gwas-cpp_v3.0.0.sif \
+    docker://ghcr.io/mjfi2sb3/kmer-gwas-cpp:v3.0.0
 ```
 
 ### Rebuilding the image

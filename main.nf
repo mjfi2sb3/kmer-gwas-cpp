@@ -117,6 +117,7 @@ def writeManifest(String accessions_file, String data_dir, int n_accessions) {
     file("${params.output_dir}/run_manifest.txt").text = """\
         # kmer-GWAS run manifest
         # Written at launch; describes how this results directory was produced.
+        pipeline_version    = ${workflow.manifest.version ?: 'n/a'}
         run_name            = ${workflow.runName}
         started             = ${workflow.start}
         nextflow_version    = ${workflow.nextflow.version}
