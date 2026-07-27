@@ -4,6 +4,43 @@ A high-performance Nextflow pipeline for genome-wide association studies (GWAS) 
 
 ---
 
+## What's new
+
+The counting and merging stages have been rewritten so that memory and inode use
+are bounded by configuration rather than by the data. Validated on real rice
+data against the previous implementation: **396.5 million matrix rows, zero
+unexplained differences.**
+
+| | before | after |
+|---|---|---|
+| `KMER_COUNT` peak memory | 57.1 GB, scales with input | **27.6 GB, capped by a budget** |
+| `MATRIX_MERGE` peak memory | 6.4 GB, scales with k-mer union | **< 0.1 GB, scales with accession count** |
+| `KMER_COUNT` peak inodes (1500 bins) | 4,502 | **2** |
+| `MATRIX_MERGE` inodes per bin job | 25,201 | **0** |
+| intermediate I/O per accession | ~12 GB written and re-read | **none** |
+| k-mer encoder | 1.14 M k-mer/s | **531 M k-mer/s** |
+
+Practical consequences:
+
+- **Large genomes are now possible.** The old code held ~3 copies of every read
+  before counting: ~34 GB for rice, but ~1.5 TB for wheat. Reads are now streamed.
+- **`--num_bins` no longer has to grow with genome size**, because Stage 2 memory
+  no longer depends on the number of distinct k-mers — and bin count was what
+  drove inode use.
+- **`--kmer_size` is configurable** (odd, 15–63) at no runtime cost. `k ≤ 32`
+  uses a 10-byte record instead of 18, cutting Stage 1 output by ~44%.
+- **`--delimiter bits`** packs presence/absence one bit per accession, ~8×
+  smaller than `tab` at 12,600 accessions.
+
+Two intentional output changes: a spurious second tab after the k-mer column is
+gone, and poly-A k-mers are no longer silently discarded. Everything else is
+identical to the previous implementation.
+
+Full measurements, methodology and test coverage: **[docs/BENCHMARKS.md](docs/BENCHMARKS.md)**.
+Reproduce the comparison yourself with `tools/compare_to_baseline.sh`.
+
+---
+
 ## Overview
 
 The pipeline processes paired-end FASTQ files (plain or gzip-compressed) and produces a binary k-mer matrix across all accessions. It runs in two stages:
