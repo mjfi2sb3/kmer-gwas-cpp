@@ -22,8 +22,9 @@ unexplained differences.**
 
 Practical consequences:
 
-- **Large genomes are now possible.** The old code held ~3 copies of every read
-  before counting: ~34 GB for rice, but ~1.5 TB for wheat. Reads are now streamed.
+- **Peak memory no longer tracks input size.** The old code held roughly three
+  copies of every read before counting anything; reads are now streamed and
+  k-mer accumulation is capped by a configurable budget.
 - **`--num_bins` no longer has to grow with genome size**, because Stage 2 memory
   no longer depends on the number of distinct k-mers — and bin count was what
   drove inode use.

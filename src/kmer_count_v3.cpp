@@ -18,9 +18,9 @@
 //     Reads are streamed and discarded batch by batch; k-mer accumulation is
 //     capped by a budget and spills to one temporary file if exceeded. Peak
 //     memory therefore does not scale with genome size or sequencing depth.
-//     Previously the program held ~3 copies of every read (coverage x genome
-//     x 3 bytes: ~34 GB for rice, ~1.5 TB for wheat) and accumulated k-mers
-//     without any cap, which made large genomes impossible. Tasks #4 and #17.
+//     Previously the program held roughly three copies of every read and
+//     accumulated k-mers without any cap, so peak memory tracked input size
+//     directly rather than being something you could set. Tasks #4 and #17.
 //
 //  2. INODES ARE O(1) PER ACCESSION.
 //     One pack file, plus one spill file only if the budget was exceeded.

@@ -64,9 +64,8 @@ The two numbers differ in kind, not just magnitude:
   spills to a single temporary file if the budget is exceeded, so peak memory
   does not track genome size or sequencing depth at all.
 
-That difference is what makes large genomes possible. Extrapolating the
-baseline's read-holding cost: rice needs ~34 GB, but wheat would need ~1.5 TB
-and conifer ~2 TB — beyond any per-node allocation.
+The practical effect is that the memory a job needs can be set in advance
+rather than discovered from the data.
 
 ### Intermediate I/O
 
