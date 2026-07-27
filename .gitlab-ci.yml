@@ -1,5 +1,6 @@
 stages:
   - build
+  - release
 
 build-container:
   stage: build
@@ -14,3 +15,32 @@ build-container:
       --destination ghcr.io/mjfi2sb3/kmer-gwas-cpp:${CI_COMMIT_TAG}
   rules:
     - if: $CI_COMMIT_TAG
+
+# Create a GitLab Release for the tag, once the image has built. The release
+# notes are the matching section of CHANGELOG.md, extracted at build time so the
+# Release page and the changelog cannot drift apart.
+create-release:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  needs:
+    - build-container
+  rules:
+    - if: $CI_COMMIT_TAG
+  script:
+    # Pull the "## <tag>" section out of CHANGELOG.md (up to the next "## ").
+    # Fall back to a one-line description if that section is not found.
+    - |
+      notes="$(awk -v t="## ${CI_COMMIT_TAG}" '
+        $0==t {f=1; next}
+        f && /^## / {exit}
+        f {print}
+      ' CHANGELOG.md)"
+      if [ -z "$notes" ]; then
+        notes="Release ${CI_COMMIT_TAG}. See CHANGELOG.md."
+      fi
+      printf '%s\n' "$notes" > release_notes.md
+      echo "----- release notes -----"; cat release_notes.md
+  release:
+    tag_name: "$CI_COMMIT_TAG"
+    name: "Release $CI_COMMIT_TAG"
+    description: release_notes.md
