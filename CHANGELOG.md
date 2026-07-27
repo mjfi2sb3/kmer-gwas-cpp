@@ -25,11 +25,15 @@ the bit-packed format, and makes the default output the most compact text form.
 - **`--encoding text|bits`** — selects how the value vector is serialised,
   independent of `--delimiter` and `--count`.
 - **`--delimiter space`** — space-separated values, alongside `tab` and `none`.
-- **`bits_to_text`** — expand a `bits` matrix back to text (gzip-aware, optional
-  accession-name header). Two interchangeable implementations with identical
-  output: `tools/bits_to_text.py` (portable, no build) and a C++ version
-  (`src/bits_to_text.cpp`, `make bits_to_text`) that is ~14× faster for large
-  matrices. Output is byte-identical to a natively written text matrix.
+- **`bits_to_text`** — convert a matrix between the bit-packed and text forms,
+  both ways: `--decode` (bits → text, default) and `--encode` (text → bits, to
+  compress an existing text matrix). Gzip-aware, optional accession-name header.
+  Two interchangeable implementations with byte-identical output:
+  `tools/bits_to_text.py` (portable, no build) and a C++ version
+  (`src/bits_to_text.cpp`) that is ~14× faster for large matrices.
+- Each run now **compiles `bits_to_text` into `results/bin/`** (portable build,
+  no `-march=native`), so a results directory ships with the tool that reads its
+  bit-packed matrices.
 - The `matrix_merge` `--help`, `main.nf --help`, and the README now include the
   full `--encoding` × `--count` × `--delimiter` combination table.
 

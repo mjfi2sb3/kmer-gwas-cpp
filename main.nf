@@ -3,6 +3,7 @@ nextflow.enable.dsl = 2
 
 include { KMER_COUNT   } from './modules/kmer_count'
 include { MATRIX_MERGE } from './modules/matrix_merge'
+include { BUILD_TOOLS  } from './modules/build_tools'
 
 // ---------------------------------------------------------------------------
 // Help
@@ -226,6 +227,10 @@ workflow {
         .splitText()
         .map { it.trim() }
         .filter { it }                  // skip blank lines
+
+    // Build the bits_to_text converter into results/bin/ so the output
+    // directory ships with the tool needed to read its bit-packed matrices.
+    BUILD_TOOLS()
 
     KMER_COUNT(ch_accessions, params.num_bins, data_dir)
 

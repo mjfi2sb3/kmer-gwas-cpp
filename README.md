@@ -199,6 +199,8 @@ FASTA input (single- or multi-line records) is also accepted and is detected fro
 ```
 results/
 ├── run_manifest.txt              # parameters this results directory was produced with
+├── bin/
+│   └── bits_to_text              # compiled converter for the bit-packed matrices
 ├── kmer_count_k<k>/
 │   └── <accession>.kbin          # one self-indexed pack file per accession
 ├── matrix/
@@ -285,23 +287,26 @@ silently reused.
 > The matrix usually dwarfs every intermediate file in this pipeline, so this is
 > the single largest lever on total output size.
 >
-> To expand a `bits` matrix back to text, use **`bits_to_text`** (it needs the
-> accession count, to strip padding bits). Two interchangeable versions with
-> identical output — the Python one is zero-setup, the C++ one is ~14× faster
-> for large matrices:
+> Use **`bits_to_text`** to convert between the two forms — `--decode` (bits →
+> text, the default) and `--encode` (text → bits, to compress an existing text
+> matrix). It needs the accession count, to strip or check padding bits. Each
+> run publishes a compiled copy to `results/bin/bits_to_text`, so the output
+> directory ships with the tool that reads it:
 >
 > ```bash
-> # portable, no build
-> tools/bits_to_text.py -a accessions.txt --delimiter tab \
+> # decode a bits matrix to tab-separated text
+> results/bin/bits_to_text -a accessions.txt --delimiter tab \
 >     results/matrix/matrix_*/0_matrix.tsv.gz  0_text.tsv.gz
 >
-> # faster; build with:  make -C src bits_to_text
-> src/bits_to_text -a accessions.txt --delimiter tab \
->     results/matrix/matrix_*/0_matrix.tsv.gz  0_text.tsv.gz
+> # or compress a text matrix to bits
+> results/bin/bits_to_text --encode -a accessions.txt --delimiter tab \
+>     0_text.tsv.gz  0_bits.tsv.gz
 > ```
 >
-> Or decode a row directly: split on the tab, `bytes.fromhex(rest)`, then
-> accession *i* is present if `(bs[i >> 3] >> (i & 7)) & 1`.
+> A portable Python version, `tools/bits_to_text.py`, has the same interface and
+> byte-identical output (the C++ one is ~14× faster for large matrices). Or
+> decode a row by hand: split on the tab, `bytes.fromhex(rest)`, then accession
+> *i* is present if `(bs[i >> 3] >> (i & 7)) & 1`.
 
 > **`--threshold` is a minor-allele-frequency filter, not a count filter.** It is applied to the number of accessions in which a k-mer occurs — *not* to the k-mer's count within an accession. It is two-sided: `--threshold 20` keeps k-mers found in at least 20 accessions **and** in at most `num_accessions - 20`, discarding both rare and near-ubiquitous k-mers, since neither carries usable association signal. The default of `0` disables the filter entirely, on the assumption that downstream analysis applies its own MAF cutoff.
 
