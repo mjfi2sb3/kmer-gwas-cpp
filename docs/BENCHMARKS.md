@@ -1,7 +1,7 @@
 # Benchmarks and validation
 
-Measurements for the genome-agnostic redesign, against the previous
-implementation (`3297c96`). Every figure here was measured, not estimated;
+Measurements for the bounded-memory redesign of the counting and merging
+stages, against the previous implementation (`3297c96`). Every figure here was measured, not estimated;
 where something is a projection it says so.
 
 ---

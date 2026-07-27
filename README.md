@@ -57,7 +57,7 @@ The pipeline processes paired-end FASTQ files (plain or gzip-compressed) and pro
 - Works across HPC systems; no hardcoded paths or site-specific module dependencies
 - Supports presence/absence or raw count output, configurable thresholds, and core k-mer extraction
 - **Inode-efficient**: one pack file per accession and no intermediate files at all. Stage 1 peak inode use is 2 per job regardless of bin count (previously 1 + `num_bins` directories + 2 × `num_bins` files); Stage 2 needs no extraction step
-- **Memory-bounded, genome-agnostic**: Stage 1 streams reads and caps k-mer accumulation with a budget, spilling to a single temporary file only if exceeded. Stage 2 merges sorted slices with memory proportional to the number of accessions, not to the number of distinct k-mers — so `num_bins` no longer has to grow with genome size
+- **Memory-bounded**: Stage 1 streams reads and caps k-mer accumulation with a budget, spilling to a single temporary file only if exceeded. Stage 2 merges sorted slices with memory proportional to the number of accessions, not to the number of distinct k-mers — so `num_bins` no longer has to grow with genome size
 - Compressed output: matrix files are compressed with pigz (parallel gzip) if available, otherwise standard gzip
 
 ---
