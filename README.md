@@ -77,7 +77,7 @@ Validated on real rice data against the previous implementation:
   compiled in at job start so it costs nothing at run time. Values of 32 or below
   pack a k-mer into a single 64-bit word, making each record 10 bytes instead of
   18 and cutting Stage 1 output by ~44%.
-- **`--delimiter bits`** — writes presence/absence as one bit per accession rather
+- **`--encoding bits`** — writes presence/absence as one bit per accession rather
   than one character. At 12,600 accessions a matrix row shrinks from 25,251 to
   3,202 bytes, ~8× smaller, encoding exactly the same information.
 - **`--min_kmer_count`** — drop k-mers seen fewer than *n* times within an
@@ -229,7 +229,8 @@ silently reused.
 | `--min_kmer_count` | `2` | Drop k-mers seen fewer than this many times within an accession. Low counts are overwhelmingly sequencing errors; raising it shrinks Stage 1 output and everything downstream |
 | `--threshold` | `0` | Two-sided MAF filter on the number of **accessions** carrying a k-mer. Keeps only k-mers present in `[threshold, num_accessions - threshold]` accessions; `0` disables it (see note below) |
 | `--count` | `n` | `y` = raw counts, `n` = presence/absence |
-| `--delimiter` | `tab` | Matrix value format: `tab`, `none` or `bits`. At large cohorts `bits` is ~8× smaller — see note below |
+| `--encoding` | `text` | Matrix encoding: `text` (delimited) or `bits` (1 bit per accession as hex, ~8× smaller; presence/absence only). See note below |
+| `--delimiter` | `none` | Value separator for the **text** encoding: `tab`, `space` or `none`. `none` concatenates single characters and is presence/absence only |
 | `--core` | `n` | `y` = write core k-mers file per bin. Core k-mers are **excluded from the matrix** (see note below) |
 | `--matrix_merge_cpus` | `32` | Threads for the MATRIX_MERGE stage |
 | `--kmer_count_memory` | `370.GB` | RAM per KMER_COUNT job. Use dot notation: `120.GB`, `370.GB`. Use `--clusterOptions='--mem=0'` to request all available node RAM instead |
@@ -253,18 +254,47 @@ silently reused.
 >
 > **Changing `k` invalidates existing bin files**: they store fixed-width k-mers and cannot be read at a different `k`. Use a fresh `--output_dir`.
 
-> **Matrix row format and cohort size.** Each row is the k-mer, a tab, then one value per accession, so row width grows linearly with the panel:
+> **Matrix output format.** Three options combine to control the output. The
+> k-mer is always tab-separated from the values; `--delimiter` separates the
+> values from each other.
+>
+> - **`--count`** — what each cell holds: `n` presence/absence (default), or `y` a raw count.
+> - **`--encoding`** — `text` (default) writes the values as characters; `bits` packs presence/absence one bit per accession, written as hex.
+> - **`--delimiter`** (text encoding only) — `none` (default) concatenates, `tab`, or `space`.
+>
+> | encoding | count | delimiter | a row (present in acc 0 & 2) |
+> |---|---|---|---|
+> | text | n | none *(default)* | `KMER⇥101` |
+> | text | n | tab | `KMER⇥1⇥0⇥1` |
+> | text | n | space | `KMER⇥1 0 1` |
+> | text | y | tab / space | `KMER⇥5⇥0⇥3` |
+> | text | y | none | **rejected** — multi-digit counts would merge |
+> | bits | n | *(ignored)* | `KMER⇥05` (hex) |
+> | bits | y | — | **rejected** — bits is presence/absence only |
+>
+> `none` and `bits` both require `--count n` for the same reason: their values
+> cannot be told apart once a value needs more than one character.
+>
+> **Size at scale**, per matrix row:
 >
 > | accessions | `tab` | `none` | `bits` |
 > |---|---|---|---|
 > | 1,000 | 2,051 B | 1,052 B | 302 B |
 > | 12,600 | 25,251 B | 12,652 B | **3,202 B** |
 >
-> `bits` packs presence/absence one bit per accession and writes it as hex, making it about 8× smaller than `tab` at 12,600 accessions. Because the matrix usually dwarfs every intermediate file in this pipeline, that is the single largest lever on total output size. It is presence/absence only and cannot be combined with `--count y`.
+> The matrix usually dwarfs every intermediate file in this pipeline, so this is
+> the single largest lever on total output size.
 >
-> Decoding a `bits` row: split on the tab, `bytes.fromhex(rest)`, then accession *i* is present if `(bs[i >> 3] >> (i & 7)) & 1`.
+> To expand a `bits` matrix back to text, use **`tools/bits_to_text.py`** (it
+> needs the accession count, to strip padding bits):
 >
-> `none` concatenates single characters with no separator; it is only meaningful with `--count n`, since multi-digit counts would be unparseable, and that combination is rejected.
+> ```bash
+> tools/bits_to_text.py -a accessions.txt --delimiter tab \
+>     results/matrix/matrix_*/0_matrix.tsv.gz  0_text.tsv.gz
+> ```
+>
+> Or decode a row directly: split on the tab, `bytes.fromhex(rest)`, then
+> accession *i* is present if `(bs[i >> 3] >> (i & 7)) & 1`.
 
 > **`--threshold` is a minor-allele-frequency filter, not a count filter.** It is applied to the number of accessions in which a k-mer occurs — *not* to the k-mer's count within an accession. It is two-sided: `--threshold 20` keeps k-mers found in at least 20 accessions **and** in at most `num_accessions - 20`, discarding both rare and near-ubiquitous k-mers, since neither carries usable association signal. The default of `0` disables the filter entirely, on the assumption that downstream analysis applies its own MAF cutoff.
 

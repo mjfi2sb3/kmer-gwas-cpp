@@ -28,7 +28,11 @@ def helpMessage() {
                                  Filters on HOW MANY ACCESSIONS carry the k-mer, not on
                                  its count within an accession. 0 disables the filter.
         --count                  'y' = counts, 'n' = presence/absence               [default: ${params.count}]
-        --delimiter              Matrix value format: 'tab', 'none' or 'bits'      [default: ${params.delimiter}]
+        --delimiter              Value separator (text encoding): 'tab','space','none' [default: ${params.delimiter}]
+                                 'none' concatenates and is presence/absence only.
+        --encoding               Matrix encoding: 'text' or 'bits'                  [default: ${params.encoding}]
+                                 'bits' packs presence/absence 1 bit per accession
+                                 as hex (~8x smaller than tab); requires --count n.
                                  'bits' packs presence/absence 1 bit per accession as hex:
                                  ~8x smaller than 'tab' at 12,600 accessions. Excludes --count y.
         --core                   'y' = write core k-mers file, 'n' = skip           [default: ${params.core}]
@@ -89,6 +93,7 @@ def paramSummary(String accessions_file, String data_dir) {
       threshold              : ${c_val}${params.threshold}${c_reset}
       count                  : ${c_val}${params.count}${c_reset}
       delimiter              : ${c_val}${params.delimiter}${c_reset}
+      encoding               : ${c_val}${params.encoding}${c_reset}
       core                   : ${c_val}${params.core}${c_reset}
       matrix_merge_cpus      : ${c_val}${params.matrix_merge_cpus}${c_reset}
       kmer_count_memory      : ${c_val}${params.kmer_count_memory.toGiga()}.GB${c_reset}
@@ -131,6 +136,7 @@ def writeManifest(String accessions_file, String data_dir, int n_accessions) {
         threshold           = ${params.threshold}
         count               = ${params.count}
         delimiter           = ${params.delimiter}
+        encoding            = ${params.encoding}
         core                = ${params.core}
 
         accessions_file     = ${accessions_file}
@@ -192,6 +198,17 @@ workflow {
     if (kmer_size % 2 == 0 || kmer_size < 15 || kmer_size > 63) {
         exit 1, "ERROR: --kmer_size must be an ODD number between 15 and 63 (got ${params.kmer_size})"
     }
+
+    // Validate the output-format options up front, so a bad combination fails at
+    // launch rather than in every MATRIX_MERGE job. Mirrors the C++ checks.
+    if (!(params.delimiter in ['tab', 'space', 'none']))
+        exit 1, "ERROR: --delimiter must be 'tab', 'space' or 'none' (got '${params.delimiter}'). 'bits' is now --encoding bits."
+    if (!(params.encoding in ['text', 'bits']))
+        exit 1, "ERROR: --encoding must be 'text' or 'bits' (got '${params.encoding}')."
+    if (params.encoding == 'bits' && params.count == 'y')
+        exit 1, "ERROR: --encoding bits is presence/absence only; it cannot be combined with --count y."
+    if (params.encoding == 'text' && params.delimiter == 'none' && params.count == 'y')
+        exit 1, "ERROR: --delimiter none cannot be combined with --count y (multi-digit counts would be unparseable). Use --delimiter tab or space."
 
     // Resolve to absolute paths — relative inputs break inside Singularity
     // containers and SLURM work directories

@@ -255,10 +255,10 @@ int main(int argc, char *argv[])
 	uint file_index = 0;
 	bool have_index = false;      // --index is required; see the guard below
 	uint min_occur = 0;
-	std::string delimiter = "\t";  // Default value: tab
+	std::string delimiter = "";  // Default: none (concatenated, presence/absence)
 	bool show_count = false;  // Default is to show presence/absence
 	bool write_core = false;  // Default is to skip core k-mers file
-	bool bit_packed = false;  // --delimiter bits: 1 bit per accession
+	bool bit_packed = false;  // --encoding bits: 1 bit per accession (else text)
 	uint num_bins = 0;
 	uint available_threads;
 	if (const char* s = getenv("SLURM_CPUS_PER_TASK")) {
@@ -276,6 +276,7 @@ int main(int argc, char *argv[])
 		{"index",    required_argument, 0, 'f'},
 		{"threshold", required_argument, 0, 't'},
 		{"delimiter", required_argument, 0, 'd'},
+		{"encoding", required_argument, 0, 'e'},
 		{"count",    required_argument, 0, 'c'},
 		{"core",     required_argument, 0, 'r'},
 		{"bins",     required_argument, 0, 'b'},
@@ -285,7 +286,7 @@ int main(int argc, char *argv[])
     int option_index = 0;
     int c;
 
-    while ((c = getopt_long(argc, argv, "i:a:f:t:d:c:r:b:T:", long_options, &option_index)) != -1)
+    while ((c = getopt_long(argc, argv, "i:a:f:t:d:e:c:r:b:T:", long_options, &option_index)) != -1)
     {
         switch (c) 
         {
@@ -314,20 +315,44 @@ int main(int argc, char *argv[])
 				{
 				    delimiter = "\t";
 				}
+				else if (string(optarg) == "space")
+				{
+				    delimiter = " ";
+				}
 				else if (string(optarg) == "none")
 				{
 				    delimiter = "";
 				}
 				else if (string(optarg) == "bits")
 				{
-				    // Bit-packed presence/absence: 1 bit per accession instead of
-				    // 1-2 bytes. See the note in write_row for the layout.
-				    delimiter = "";
+				    // 'bits' is an ENCODING, not a delimiter (it was under
+				    // --delimiter in v3.0.0; that was a naming error). Reject it
+				    // here so the mistake is caught rather than silently ignored.
+				    cerr << "Error: 'bits' is not a delimiter — it is an output "
+				            "encoding. Use --encoding bits (with --delimiter for "
+				            "the text encoding only)." << endl;
+				    return -1;
+				}
+				else
+				{
+				    cerr << "Invalid delimiter option. Use 'tab', 'space' or 'none'." << endl;
+				    return -1;
+				}
+				break;
+            case 'e':
+				if (string(optarg) == "text")
+				{
+				    bit_packed = false;
+				}
+				else if (string(optarg) == "bits")
+				{
+				    // Bit-packed presence/absence: 1 bit per accession written as
+				    // hex, instead of one delimited character. See write_row.
 				    bit_packed = true;
 				}
 				else
 				{
-				    cerr << "Invalid delimiter option. Use 'tab', 'none' or 'bits'." << endl;
+				    cerr << "Invalid encoding option. Use 'text' or 'bits'." << endl;
 				    return -1;
 				}
 				break;
@@ -373,19 +398,27 @@ int main(int argc, char *argv[])
         num_threads = available_threads;
     }
 
-    // `--delimiter none` packs values with no separator, which is only
-    // decodable when every value is a single character. With --count y the
-    // counts are multi-digit and the row becomes unparseable (task #5).
+    // The two content/encoding constraints, both for the same underlying reason:
+    // a value vector is only recoverable if the values can be told apart.
+    //
+    //   --encoding bits   packs presence/absence into single bits, so counts
+    //                     cannot be represented at all.
+    //   --delimiter none  concatenates values with no separator, so multi-digit
+    //                     counts run together and cannot be split.
+    //
+    // Both are therefore rejected in combination with --count y. --delimiter tab
+    // and --delimiter space carry counts fine.
     if (bit_packed && show_count) {
-        cerr << "Error: --delimiter bits is presence/absence only and cannot be "
-                "combined with --count y. Use --delimiter tab for counts." << endl;
+        cerr << "Error: --encoding bits is presence/absence only and cannot be "
+                "combined with --count y. Use --encoding text (with --delimiter "
+                "tab or space) for counts." << endl;
         return -1;
     }
     if (delimiter.empty() && !bit_packed && show_count) {
         cerr << "Error: --delimiter none cannot be combined with --count y — "
                 "multi-digit counts would be concatenated with no separator and "
-                "the matrix could not be parsed. Use --delimiter tab for counts, "
-                "or --count n for presence/absence." << endl;
+                "the matrix could not be parsed. Use --delimiter tab or space for "
+                "counts, or --count n for presence/absence." << endl;
         return -1;
     }
 
@@ -406,14 +439,36 @@ int main(int argc, char *argv[])
 		     << "\t\t            Keeps k-mers carried by [value, n_accessions - value] accessions.\n"
 		     << "\t\t            Filters on accession occurrence, NOT on per-accession count. 0 = off.\n"
 		     << "\t\t            Note: Use --threshold 20 or --threshold=20 (both work)\n"
-		     << "\t\t--delimiter <tab|none|bits> (default: " << (delimiter == "\t" ? "tab" : (delimiter == " " ? "space" : "none")) << ")\n"
+		     << "\t\t--delimiter <tab|space|none> (default: " << (delimiter == "\t" ? "tab" : (delimiter == " " ? "space" : "none")) << ")\n"
+		     << "\t\t            Separator between values in the text encoding.\n"
+		     << "\t\t            'none' concatenates and is presence/absence only.\n"
+		     << "\t\t--encoding <text|bits> (default: " << (bit_packed ? "bits" : "text") << ")\n"
+		     << "\t\t            'bits' packs presence/absence 1 bit per accession as\n"
+		     << "\t\t            hex, ~8x smaller than tab at large cohorts. Ignores\n"
+		     << "\t\t            --delimiter and requires --count n.\n"
 		     << "\t\t--count <print matrix as absence/presence or actual k-mer counts; type: y|n> (default: " << (show_count ? "y" : "n") << ")\n"
 		     << "\t\t--core    <write core k-mers file (_core.txt); type: y|n> (default: n)\n"
 		     << "\t\t            Core = present in ALL accessions; these are excluded from the matrix.\n"
-		     << "\t\t            'bits' packs presence/absence 1 bit per accession as hex:\n"
-		     << "\t\t            ~8x smaller than 'tab' at large cohorts. Excludes --count y.\n"
 		     << "\t\t--bins    <number of bins (used in output folder name)> (default: 0)\n"
-		     << "\t\t--threads <parallel threads for accession reading> (default: SLURM_CPUS_PER_TASK if set, else hardware concurrency)\n\n";
+		     << "\t\t--threads <parallel threads for accession reading> (default: SLURM_CPUS_PER_TASK if set, else hardware concurrency)\n"
+		     << "\n"
+		     << "\tHow --encoding, --delimiter and --count combine:\n"
+		     << "\n"
+		     << "\t  encoding  count  delimiter   result\n"
+		     << "\t  --------  -----  ---------   --------------------------------------\n"
+		     << "\t  text      n      tab         KMER <tab> 1 <tab> 0 <tab> 1\n"
+		     << "\t  text      n      space       KMER <tab> 1 0 1\n"
+		     << "\t  text      n      none        KMER <tab> 101   (concatenated)\n"
+		     << "\t  text      y      tab         KMER <tab> 5 <tab> 0 <tab> 3\n"
+		     << "\t  text      y      space       KMER <tab> 5 0 3\n"
+		     << "\t  text      y      none        REJECTED  (multi-digit counts merge)\n"
+		     << "\t  bits      n      (ignored)   KMER <tab> 05    (1 bit/accession, hex)\n"
+		     << "\t  bits      y      -           REJECTED  (bits is presence/absence only)\n"
+		     << "\n"
+		     << "\t  The k-mer is always tab-separated from the values; --delimiter\n"
+		     << "\t  separates the values from each other. 'none' and 'bits' both\n"
+		     << "\t  require --count n, for the same reason: their values cannot be\n"
+		     << "\t  told apart once a value needs more than one character.\n\n";
 		return -1;
 	}
 
