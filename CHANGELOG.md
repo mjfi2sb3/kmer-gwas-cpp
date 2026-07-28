@@ -4,6 +4,31 @@ All notable changes to this pipeline are documented here.
 Versions follow [semantic versioning](https://semver.org): the major number is
 bumped when output or interfaces change in a backwards-incompatible way.
 
+## v3.1.1
+
+A data-loss fix and safer default memory requests. No format or interface
+changes; results are byte-identical to v3.1.0.
+
+### Fixed
+
+- **`--cleanup true` deleted the published `.kbin` packs.** The completion
+  handler ran `deleteDir()` over the work tree. `MATRIX_MERGE` stages the
+  published `kmer_count_k<k>/` directory into its work dir as a *directory
+  symlink*, and Groovy's `deleteDir()` follows directory symlinks — so cleanup
+  recursed through the link into `results/` and removed the real packs. Work-dir
+  cleanup now relies solely on Nextflow's native `cleanup` directive, which is
+  symlink-safe. (`--cleanup false` was never affected, which is why the loss
+  only appeared on the default setting.)
+
+### Changed
+
+- **Default job memory is 128 GB per stage** (was 370 GB), so jobs schedule on
+  clusters with smaller nodes. Stage 1 caps k-mer accumulation at 0.7× (~90 GB;
+  measured 27.6 GB on rice), and Stage 2's k-way merge needs only ~1.5–2 GB at
+  12,650 accessions, so 128 GB is safe headroom. Override with
+  `--kmer_count_memory` / `--matrix_merge_memory`.
+- The `standard` (local) profile now requests 32 cpus / 128 GB (was 64 / 256).
+
 ## v3.1.0
 
 Separates the matrix *encoding* from the value *delimiter*, adds a converter for
