@@ -154,11 +154,13 @@ def writeManifest(String accessions_file, String data_dir, int n_accessions) {
 // Completion summary
 // ---------------------------------------------------------------------------
 workflow.onComplete {
-    if (workflow.success && params.cleanup) {
-        file(workflow.workDir).deleteDir()
-        log.info "Cleaned up work directory: ${workflow.workDir}"
-    }
-
+    // NB: work-dir cleanup is handled by the native `cleanup` directive in
+    // nextflow.config (cleanup = params.cleanup), which is symlink-safe. Do NOT
+    // reintroduce `file(workflow.workDir).deleteDir()` here: MATRIX_MERGE stages
+    // the published kmer_count_k<k>/ directory into its work dir as a symlink
+    // (path(kmer_dir)), and Groovy's deleteDir() follows that directory symlink
+    // — recursing into results/ and deleting the real .kbin packs. That was the
+    // cause of the data loss where --cleanup true wiped kmer_count_k*/*.kbin.
     def c_reset  = "\033[0m"
     def c_banner = workflow.success ? "\033[1;36m" : "\033[1;31m"  // bold cyan or bold red
     def c_head   = "\033[1;33m"                                     // bold yellow

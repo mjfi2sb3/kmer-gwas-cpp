@@ -15,5 +15,8 @@ src/bits_to_text
 data/
 accessions.txt
 
-# macOS
+# macOS / editor strays
 .DS_Store
+._*
+*.swp
+*.swo
