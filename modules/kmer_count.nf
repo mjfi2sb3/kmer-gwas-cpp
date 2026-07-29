@@ -26,11 +26,13 @@ process KMER_COUNT {
         tuple val(accession), path("${accession}.kbin"), emit: accession_pack
 
     script:
-    // Give the counter most of the task's memory as its accumulation budget,
-    // leaving headroom for the read buffers and the runtime itself.
-    // task.memory is null under profiles that set no per-process memory
-    // directive (e.g. `standard`), so fall back to a modest default.
-    def budget_gb = task.memory ? Math.max(1, (int)(task.memory.toGiga() * 0.7)) : 8
+    // The accumulation budget is auto-sized INSIDE kmer_count from the memory
+    // actually enforced on the job (cgroup / SLURM env / MemTotal), so it tracks
+    // the real node — a shared allocation, an --mem=0 exclusive node, or a bare
+    // workstation — without depending on task.memory (which is just the SLURM
+    // request and is wrong under --mem=0). Passing 0 selects that AUTO sizing;
+    // --kmer_count_budget_gb sets an explicit budget, capped at the enforced
+    // limit. See src/mem_limit.hpp.
     """
     # -DKMER_K makes the k-mer length a compile-time constant, so it is
     # user-configurable at no runtime cost (the binary is built per job anyway,
@@ -54,6 +56,6 @@ process KMER_COUNT {
     done
     [ -z "\$R2" ] && { echo "ERROR: no R2 file found for ${accession} in ${data_dir}" >&2; exit 1; }
 
-    ./kmer_count ${accession} ${num_bins} ./ "\$R1" "\$R2" ${budget_gb} ${params.min_kmer_count}
+    ./kmer_count ${accession} ${num_bins} ./ "\$R1" "\$R2" ${params.kmer_count_budget_gb} ${params.min_kmer_count}
     """
 }

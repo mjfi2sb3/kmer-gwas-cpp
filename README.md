@@ -289,7 +289,8 @@ When encoding, any value other than `0` counts as present, so a raw-count matrix
 | `--delimiter` | `none` | Value separator for the **text** encoding: `tab`, `space` or `none`. `none` concatenates single characters and is presence/absence only |
 | `--core` | `n` | `y` = write core k-mers file per bin. Core k-mers are **excluded from the matrix** (see note below) |
 | `--matrix_merge_cpus` | `32` | Threads for the MATRIX_MERGE stage |
-| `--kmer_count_memory` | `128.GB` | RAM per KMER_COUNT job. Use dot notation: `120.GB`, `256.GB`. Use `--clusterOptions='--mem=0'` to request all available node RAM instead |
+| `--kmer_count_memory` | `128.GB` | **Scheduler** memory request per KMER_COUNT job (the SLURM `--mem`, and the cgroup ceiling it enforces). Dot notation: `120.GB`, `256.GB`. For a whole node use `--clusterOptions='--mem=0'`. This is a *scheduling* knob — the accumulation budget is auto-sized from it, see `--kmer_count_budget_gb` |
+| `--kmer_count_budget_gb` | `0` (auto) | Stage 1 accumulation budget, in GB. **`0` = auto**: captured at run time from the RAM actually enforced on the job — the cgroup limit, else SLURM env, else `MemTotal` — and set to **70%** of it (the rest is headroom for read batches and worker maps). So it tracks the real node — a shared allocation, an `--mem=0` exclusive node, or a workstation — with no guessing. A positive value forces that budget, still capped at the detected limit so it can't exceed what the cgroup would OOM-kill |
 | `--matrix_merge_memory` | `128.GB` | RAM per MATRIX_MERGE job. Use dot notation: `16.GB`, `64.GB`, `128.GB`. The merge needs little (~1.5–2 GB even at 12,600 accessions); the default is generous headroom |
 | `--kmer_count_time` | `5h` | Wallclock time limit per KMER_COUNT job. Examples: `'2h'`, `'5h'`, `'1d'`, `'2h 30m'` |
 | `--matrix_merge_time` | `10h` | Wallclock time limit per MATRIX_MERGE job. Examples: `'5h'`, `'10h'`, `'1d'`, `'2h 30m'` |

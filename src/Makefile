@@ -18,7 +18,7 @@ CXX     ?= g++
 CXXFLAGS = -std=c++17 -O3 -march=native -pthread -DKMER_K=$(KMER_K) -Wall -Wextra
 BIN     ?= .
 
-HEADERS = kmer_key.hpp pack_io.hpp bin_store.hpp thread_pool.hpp
+HEADERS = kmer_key.hpp pack_io.hpp bin_store.hpp thread_pool.hpp mem_limit.hpp
 
 all: $(BIN)/kmer_count $(BIN)/matrix_merge $(BIN)/bits_to_text
 

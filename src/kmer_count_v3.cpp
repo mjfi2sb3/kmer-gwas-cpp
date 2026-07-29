@@ -30,6 +30,7 @@
 // ===========================================================================
 
 #include "thread_pool.hpp"
+#include "mem_limit.hpp"
 #include <iostream>
 #include <istream>
 #include <streambuf>
@@ -399,10 +400,11 @@ int main(int argc, char *argv[])
            << "  Writes <output>/<accession>.kbin — one self-indexed pack file holding\n"
            << "  this accession's canonical " << k << "-mers for every bin.\n"
            << "\n"
-           << "  memory_budget_GB bounds k-mer accumulation (default "
-           << DEFAULT_BUDGET_GB << "). Peak memory is\n"
-           << "  the budget regardless of genome size; exceeding it spills to a single\n"
-           << "  temporary file rather than failing.\n"
+           << "  memory_budget_GB bounds k-mer accumulation. 0 (default) auto-sizes it\n"
+           << "  from the memory actually enforced on this process (cgroup / SLURM /\n"
+           << "  MemTotal); a positive value is honoured but capped at that limit. Peak\n"
+           << "  memory is the budget regardless of genome size; exceeding it spills to a\n"
+           << "  single temporary file rather than failing.\n"
            << "\n"
            << "  min_count drops k-mers seen fewer than this many times in this accession\n"
            << "  (default " << DEFAULT_MIN_COUNT << "). Low counts are overwhelmingly sequencing errors;\n"
@@ -419,8 +421,37 @@ int main(int argc, char *argv[])
          output_path += '/';
 
       vector<string> accession_list = { argv[4], argv[5] };
-      double budget_gb = (argc >= 7) ? atof(argv[6]) : DEFAULT_BUDGET_GB;
-      if (budget_gb <= 0) budget_gb = DEFAULT_BUDGET_GB;
+
+      // Accumulation budget. A positive 6th argument is an explicit request,
+      // honoured but capped at the memory actually enforced on this process; 0
+      // (the default the pipeline passes) means AUTO — a fraction of that
+      // enforced limit, so the budget tracks the real node whether it is a
+      // shared allocation, an --mem=0 exclusive node, or a bare workstation.
+      // See mem_limit.hpp. Output is identical whatever the budget; it only
+      // changes how often accumulation spills.
+      static const double BUDGET_FRACTION = 0.7;   // ~30% left for read batches + worker maps
+      double budget_req_gb = (argc >= 7) ? atof(argv[6]) : 0.0;
+      kmer::MemLimit lim   = kmer::detect_memory_limit();
+      double limit_gb      = lim.bytes ? lim.bytes / 1e9 : 0.0;
+      double budget_gb;
+      string budget_note;
+      if (budget_req_gb > 0.0) {
+         if (limit_gb > 0.0 && budget_req_gb > limit_gb) {
+            budget_gb   = limit_gb;
+            budget_note = "explicit request reduced to the enforced limit";
+         } else {
+            budget_gb   = budget_req_gb;
+            budget_note = "explicit request";
+         }
+      } else if (limit_gb > 0.0) {
+         budget_gb   = BUDGET_FRACTION * limit_gb;
+         budget_note = "auto (70% of enforced limit)";
+      } else {
+         budget_gb   = DEFAULT_BUDGET_GB;
+         budget_note = "fallback default (no limit detected)";
+      }
+      if (budget_gb < 1.0) budget_gb = 1.0;
+
       kmer::Count min_count = (argc >= 8) ? (kmer::Count)atoi(argv[7]) : DEFAULT_MIN_COUNT;
       if (min_count < 1) min_count = 1;
 
@@ -428,8 +459,11 @@ int main(int argc, char *argv[])
       cout << "PROCESSING ACCESSION: " << accession << endl;
       cout << "  k = " << k << ", bins = " << NUM_FILES
            << ", record = " << kmer::RECORD_BYTES << " B"
-           << ", memory budget = " << budget_gb << " GB"
            << ", min_count = " << min_count << endl;
+      cout << "  memory: enforced limit = "
+           << (limit_gb > 0.0 ? std::to_string((long)limit_gb) + " GB" : string("unknown"))
+           << " [" << lim.source << "]" << endl;
+      cout << "  memory: budget = " << (long)budget_gb << " GB (" << budget_note << ")" << endl;
       auto start = chrono::steady_clock::now();
 
       filesystem::create_directories(output_path);
