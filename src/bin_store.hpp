@@ -99,17 +99,22 @@ public:
         if (b.buf.size() >= per_bin_limit_) reduce(bin, b);
     }
 
-    // Merge everything for `bin` into one sorted, deduplicated, filtered slice.
-    // Records with count < min_count are dropped, as is the all-zero sentinel key.
-    void finalize_bin(size_t bin, std::vector<Record>& out, Count min_count)
+    // Finalize `bin` IN PLACE: after this returns, bins_[bin].buf holds the one
+    // sorted, deduplicated, count-filtered slice ready to write to the pack.
+    //
+    // Safe to call concurrently for DIFFERENT bins: each call touches only its
+    // own Bin, and the spill merge reads through a per-call ifstream with its own
+    // file offset, so no mutable state is shared between bins. This is what lets
+    // the finalize phase run across the thread pool instead of one bin at a time;
+    // the per-bin sorts dominate this stage, so parallelising them is the win.
+    // (The pack WRITE stays serial in the caller — bins must be written in
+    // ascending order — but it is cheap I/O next to the sorting.)
+    size_t finalize_bin_inplace(size_t bin, Count min_count)
     {
         Bin& b = bins_[bin];
-        out.clear();
         sort_and_compact(b.buf);
 
-        if (b.spills.empty()) {
-            out.swap(b.buf);
-        } else {
+        if (!b.spills.empty()) {
             // Concatenate the spilled blocks with the in-memory remainder and
             // compact once. Per accession a single bin holds only
             // (total / num_bins) records, so this stays small even when the
@@ -118,8 +123,9 @@ public:
             if (!in) throw std::runtime_error("BinStore: cannot reopen spill file " + spill_path_);
             size_t total = b.buf.size();
             for (auto& s : b.spills) total += s.second;
-            out.reserve(total);
-            out.insert(out.end(), b.buf.begin(), b.buf.end());
+            std::vector<Record> merged;
+            merged.reserve(total);
+            merged.insert(merged.end(), b.buf.begin(), b.buf.end());
             std::vector<Record> tmp;
             for (auto& s : b.spills) {
                 tmp.resize(s.second);
@@ -127,13 +133,13 @@ public:
                 in.read(reinterpret_cast<char*>(tmp.data()),
                         (std::streamsize)(s.second * RECORD_BYTES));
                 if (!in) throw std::runtime_error("BinStore: short read from spill file");
-                out.insert(out.end(), tmp.begin(), tmp.end());
+                merged.insert(merged.end(), tmp.begin(), tmp.end());
             }
-            std::vector<Record>().swap(b.buf);
-            sort_and_compact(out);
+            sort_and_compact(merged);
+            b.buf.swap(merged);
         }
 
-        // Drop k-mers below the error threshold.
+        // Drop k-mers below the error threshold. Filtered in place.
         //
         // Note there is deliberately NO is_zero() check here. The all-zero key
         // is a legitimate k-mer (poly-A: A encodes as 00), and filtering it out
@@ -141,10 +147,24 @@ public:
         // counting time rather than being funnelled into the zero key, so
         // nothing spurious reaches this point. See task #6.
         size_t w = 0;
-        for (size_t i = 0; i < out.size(); i++)
-            if (out[i].count >= min_count)
-                out[w++] = out[i];
-        out.resize(w);
+        for (size_t i = 0; i < b.buf.size(); i++)
+            if (b.buf[i].count >= min_count)
+                b.buf[w++] = b.buf[i];
+        b.buf.resize(w);
+        return b.buf.size();
+    }
+
+    // Read-only view of a finalized bin's slice, for writing to the pack.
+    const std::vector<Record>& bin_slice(size_t bin) const { return bins_[bin].buf; }
+
+    // Release a bin's memory once it has been written to the pack.
+    void release_bin(size_t bin) { std::vector<Record>().swap(bins_[bin].buf); }
+
+    // Serial convenience wrapper (finalize in place, then hand the slice out).
+    void finalize_bin(size_t bin, std::vector<Record>& out, Count min_count)
+    {
+        finalize_bin_inplace(bin, min_count);
+        out.swap(bins_[bin].buf);
     }
 
     bool   spilled()      const { return spill_rounds_ > 0; }

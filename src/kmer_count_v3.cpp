@@ -494,13 +494,26 @@ int main(int argc, char *argv[])
       cout << "Writing pack " << pack_path << " ..." << endl;
       {
          kmer::PackWriter pack(pack_path, (uint32_t)NUM_FILES);
-         vector<kmer::Record> slice;
+
+         // Phase A — sort / compact / filter every bin IN PARALLEL. The bins are
+         // independent (finalize_bin_inplace touches only its own bin), and the
+         // per-bin sorts dominate this stage, so we run them across the same pool
+         // that did the counting instead of one bin at a time. Sorting is done in
+         // place, so this adds no memory beyond what accumulation already held.
+         for (size_t b = 0; b < NUM_FILES; b++)
+            pool.push_task([&store, b, min_count]() { store.finalize_bin_inplace(b, min_count); });
+         pool.wait_for_tasks();
+
+         // Phase B — write bins in ascending order (the pack's offset table
+         // requires it). Each slice is already finalised, so this is just I/O and
+         // stays serial; free each bin's memory as soon as it is written.
          size_t total_kmers = 0;
          for (size_t b = 0; b < NUM_FILES; b++)
          {
-            store.finalize_bin(b, slice, min_count);
+            const vector<kmer::Record>& slice = store.bin_slice(b);
             pack.write_bin((uint32_t)b, slice);
             total_kmers += slice.size();
+            store.release_bin(b);
          }
          pack.finish();
          cout << "  " << total_kmers << " distinct k-mers across "
