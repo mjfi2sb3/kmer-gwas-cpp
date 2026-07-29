@@ -34,11 +34,21 @@ process KMER_COUNT {
     // --kmer_count_budget_gb sets an explicit budget, capped at the enforced
     // limit. See src/mem_limit.hpp.
     """
+    # Prefer zlib-ng for gzip inflate (~3x faster than stock zlib on FASTQ) when
+    # it is available (it is in the container image); fall back to stock zlib so
+    # the non-container profiles still build on clusters without it. Probe by
+    # actually compiling+linking a tiny program against zlib-ng's gz ops.
+    ZFLAGS="-lz"
+    if printf '#define WITH_GZFILEOP\\n#include <zlib-ng.h>\\nint main(){ gzFile f=zng_gzopen("","rb"); (void)f; return 0; }\\n' \
+         | g++ -x c++ - -lz-ng -o /dev/null 2>/dev/null; then
+        ZFLAGS="-DHAVE_ZLIBNG -lz-ng"
+    fi
+
     # -DKMER_K makes the k-mer length a compile-time constant, so it is
     # user-configurable at no runtime cost (the binary is built per job anyway,
     # to get -march=native for this node's CPU).
-    g++ -std=c++17 -O3 -march=native -pthread -DKMER_K=${params.kmer_size} -o kmer_count \
-        ${params.src_dir}/kmer_count_v3.cpp -lz
+    g++ -std=c++17 -O3 -march=native -pthread -DKMER_K=${params.kmer_size} \$ZFLAGS -o kmer_count \
+        ${params.src_dir}/kmer_count_v3.cpp
 
     # Locate R1 — try common extensions in order
     R1=""
@@ -56,6 +66,6 @@ process KMER_COUNT {
     done
     [ -z "\$R2" ] && { echo "ERROR: no R2 file found for ${accession} in ${data_dir}" >&2; exit 1; }
 
-    ./kmer_count ${accession} ${num_bins} ./ "\$R1" "\$R2" ${params.kmer_count_budget_gb} ${params.min_kmer_count}
+    ./kmer_count ${accession} ${num_bins} ./ "\$R1" "\$R2" ${params.kmer_count_budget_gb} ${params.min_kmer_count} ${params.kmer_count_read_threads}
     """
 }
