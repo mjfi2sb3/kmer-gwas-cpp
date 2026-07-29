@@ -4,6 +4,31 @@ All notable changes to this pipeline are documented here.
 Versions follow [semantic versioning](https://semver.org): the major number is
 bumped when output or interfaces change in a backwards-incompatible way.
 
+## v3.4.0
+
+Speeds up Stage 1 input decompression. No format or interface changes; output is
+byte-identical to v3.3.0.
+
+### Changed — performance
+
+- **Stage 1 (`KMER_COUNT`) decompresses the two mates concurrently** (one reader
+  thread per file, `--kmer_count_read_threads`, default 2). Decompression was the
+  single-threaded bottleneck of the read phase once the finalize sort was
+  parallelised; reading the mates in parallel roughly halves it on NVMe / parallel
+  filesystems. Set `--kmer_count_read_threads 1` to serialise on a single spinning
+  disk, where concurrent reads seek-thrash.
+- **Gzip inflate uses zlib-ng when available** (~3× faster than stock zlib on
+  FASTQ: 23.2 s → 7.4 s per rice mate), selected at compile time and falling back
+  to stock zlib so the non-container profiles still build on clusters without it.
+  The container image now ships zlib-ng (built from source). On few-core nodes the
+  read phase is bounded by the parallel k-mer *encoding* rather than inflate, so
+  the two libraries converge there; the zlib-ng win shows on many-core nodes where
+  encoding is cheap and the (fixed, two-thread) inflate is the wall.
+
+### Added
+
+- **`--kmer_count_read_threads`** (default `2`).
+
 ## v3.3.0
 
 Auto-sizes the Stage 1 memory budget from the RAM actually enforced on the job.
