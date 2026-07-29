@@ -4,6 +4,38 @@ All notable changes to this pipeline are documented here.
 Versions follow [semantic versioning](https://semver.org): the major number is
 bumped when output or interfaces change in a backwards-incompatible way.
 
+## v3.3.0
+
+Auto-sizes the Stage 1 memory budget from the RAM actually enforced on the job.
+No format or interface changes; output is byte-identical to v3.2.0.
+
+### Changed
+
+- **The Stage 1 accumulation budget is auto-sized from the enforced memory
+  limit**, not from the config request. Previously it was `0.7 × task.memory`
+  computed in the Nextflow module, which was wrong under `--mem=0` / `--exclusive`
+  (where `task.memory` still reads the config number while the job owns the whole
+  node) and under the `standard` profile (where `task.memory` is null, so it fell
+  back to a fixed 8 GB and `--kmer_count_memory` had no effect). `kmer_count` now
+  detects the limit at run time — cgroup v2 (walking `/proc/self/cgroup` up to the
+  root, since the leaf often reports `max` while the real limit sits on an
+  ancestor), else cgroup v1, else `SLURM_MEM_PER_NODE`/`_PER_CPU`, else
+  `MemTotal` — and sets the budget to 70% of it. This tracks the real node
+  everywhere: a shared allocation, an exclusive node, or a bare workstation.
+- **`--kmer_count_memory` is now the scheduler request** (the SLURM `--mem` and
+  the cgroup ceiling detection reads back), documented as such — no longer the
+  source of the budget.
+- **The `standard` (local) profile declares per-process memory**, so the local
+  executor gates concurrency on RAM against its pool; otherwise several
+  `KMER_COUNT` tasks could run at once and each auto-size its budget to the whole
+  machine, over-committing it.
+
+### Added
+
+- **`--kmer_count_budget_gb`** (default `0` = auto). `0` auto-sizes as above; a
+  positive value forces an explicit budget, still capped at the detected limit so
+  it can never exceed what the cgroup would OOM-kill.
+
 ## v3.2.0
 
 Parallelises the Stage 1 finalize phase. No format or interface changes; output
