@@ -289,8 +289,8 @@ When encoding, any value other than `0` counts as present, so a raw-count matrix
 | `--delimiter` | `none` | Value separator for the **text** encoding: `tab`, `space` or `none`. `none` concatenates single characters and is presence/absence only |
 | `--core` | `n` | `y` = write core k-mers file per bin. Core k-mers are **excluded from the matrix** (see note below) |
 | `--matrix_merge_cpus` | `32` | Threads for the MATRIX_MERGE stage |
-| `--kmer_count_memory` | `370.GB` | RAM per KMER_COUNT job. Use dot notation: `120.GB`, `370.GB`. Use `--clusterOptions='--mem=0'` to request all available node RAM instead |
-| `--matrix_merge_memory` | `370.GB` | RAM per MATRIX_MERGE job. Use dot notation: `64.GB`, `120.GB`, `370.GB` |
+| `--kmer_count_memory` | `128.GB` | RAM per KMER_COUNT job. Use dot notation: `120.GB`, `256.GB`. Use `--clusterOptions='--mem=0'` to request all available node RAM instead |
+| `--matrix_merge_memory` | `128.GB` | RAM per MATRIX_MERGE job. Use dot notation: `16.GB`, `64.GB`, `128.GB`. The merge needs little (~1.5–2 GB even at 12,600 accessions); the default is generous headroom |
 | `--kmer_count_time` | `5h` | Wallclock time limit per KMER_COUNT job. Examples: `'2h'`, `'5h'`, `'1d'`, `'2h 30m'` |
 | `--matrix_merge_time` | `10h` | Wallclock time limit per MATRIX_MERGE job. Examples: `'5h'`, `'10h'`, `'1d'`, `'2h 30m'` |
 | `--cleanup` | `true` | Delete Nextflow work directory on successful completion. Pass `--cleanup false` to preserve work dirs for debugging or `-resume` |
@@ -377,8 +377,8 @@ nextflow run main.nf \
 
 | Stage | CPUs | Memory | Time |
 |-------|------|--------|------|
-| KMER_COUNT | 32 (fixed) | 370.GB (`--kmer_count_memory`) | 5h (`--kmer_count_time`) |
-| MATRIX_MERGE | 32 (`--matrix_merge_cpus`) | 370.GB (`--matrix_merge_memory`) | 10h (`--matrix_merge_time`) |
+| KMER_COUNT | 32 (fixed) | 128.GB (`--kmer_count_memory`) | 5h (`--kmer_count_time`) |
+| MATRIX_MERGE | 32 (`--matrix_merge_cpus`) | 128.GB (`--matrix_merge_memory`) | 10h (`--matrix_merge_time`) |
 
 The container image is pulled automatically on first run and cached in `.singularity/` under the launch directory. Override the cache location with `--singularity_cache_dir /path/to/cache` (useful for sharing the cache across multiple runs).
 
@@ -395,7 +395,7 @@ nextflow run main.nf \
 
 ### `standard`
 
-Runs locally using all available CPUs (up to 64). Useful for small-scale testing.
+Runs locally with 32 CPUs and 128 GB (`executor.cpus` / `executor.memory` in the profile). Useful for small-scale testing.
 
 ```bash
 nextflow run main.nf \
