@@ -4,6 +4,26 @@ All notable changes to this pipeline are documented here.
 Versions follow [semantic versioning](https://semver.org): the major number is
 bumped when output or interfaces change in a backwards-incompatible way.
 
+## v3.2.0
+
+Parallelises the Stage 1 finalize phase. No format or interface changes; output
+is byte-identical to v3.1.1.
+
+### Changed — performance
+
+- **Stage 1 (`KMER_COUNT`) sorts its bins in parallel.** The finalize step —
+  sorting, compacting and count-filtering each of the `--num_bins` bins before
+  writing the pack — previously ran one bin at a time on a single core and
+  dominated Stage 1 wall-time (measured 105 of 154 s on a rice accession, with
+  39 of 40 cores idle throughout). The bins are independent, so they are now
+  sorted across the same thread pool that does the counting; the pack write
+  stays serial (bins must be written in ascending order for the offset table)
+  but is cheap next to the sort. Measured on a rice accession (219 M distinct
+  k-mers, 1500 bins, 40 cores): finalize **105 s → 6 s** (parallel sort 2.9 s,
+  serial write 3.3 s), total Stage 1 **154 s → 67 s**. The pack is
+  byte-identical in both the in-memory and spill-to-disk paths, peak memory is
+  unchanged, and there is no new dependency.
+
 ## v3.1.1
 
 A data-loss fix and safer default memory requests. No format or interface
