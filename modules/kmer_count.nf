@@ -4,8 +4,8 @@
 // tar archive. Inode cost per task went from 1 + num_bins dirs + 2 x num_bins
 // files (measured 4,502 peak at 1500 bins) to one file.
 //
-// The pack is large (~5 GB per rice accession), so the publish mode is a real
-// trade-off, exposed as --publish_mode (see nextflow.config):
+// The pack can be large (often several GB per accession), so the publish mode is
+// a real trade-off, exposed as --publish_mode (see nextflow.config):
 //   'link' (default) — a hard link: no second copy of the data, and the pack
 //     stays in the work dir so -resume can skip finished accessions. Needs
 //     output_dir and the work dir on one filesystem (main.nf checks this).

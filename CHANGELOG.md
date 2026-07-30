@@ -4,6 +4,29 @@ All notable changes to this pipeline are documented here.
 Versions follow [semantic versioning](https://semver.org): the major number is
 bumped when output or interfaces change in a backwards-incompatible way.
 
+## v3.5.1
+
+Default and documentation fixes.
+
+### Changed
+
+- **`--cleanup` now defaults to `false`.** The work directory is kept by default
+  so `-resume` can skip finished accessions out of the box (with the default
+  `--publish_mode link` the packs it keeps are hard links, so this costs no extra
+  data storage). Pass `--cleanup true` to delete it on success, which disables
+  `-resume`.
+
+### Fixed
+
+- The `--help` text showed a stale `370.GB` default for `--kmer_count_memory` and
+  `--matrix_merge_memory` (the real default is 128 GB), had a duplicated
+  `--encoding bits` line, and omitted `--kmer_count_budget_gb` and
+  `--kmer_count_read_threads`. Corrected, and the memory defaults now read from
+  the actual parameter values so they cannot drift again.
+- Parameter documentation is made generic: cohort-specific figures and a
+  site-specific SLURM account example were replaced with neutral wording and a
+  round example cohort, so the docs stand on their own.
+
 ## v3.5.0
 
 Makes `-resume` usable again without giving up the low storage footprint, exposes

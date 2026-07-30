@@ -78,8 +78,8 @@ Validated on real rice data against the previous implementation:
   pack a k-mer into a single 64-bit word, making each record 10 bytes instead of
   18 and cutting Stage 1 output by ~44%.
 - **`--encoding bits`** — writes presence/absence as one bit per accession rather
-  than one character. At 12,600 accessions a matrix row shrinks from 25,251 to
-  3,202 bytes, ~8× smaller, encoding exactly the same information.
+  than one character. At 10,000 accessions a matrix row shrinks from 20,051 to
+  2,552 bytes, ~8× smaller, encoding exactly the same information.
 - **`--min_kmer_count`** — drop k-mers seen fewer than *n* times within an
   accession. Low counts are overwhelmingly sequencing errors; this was previously
   hardcoded.
@@ -269,7 +269,7 @@ prefer a `pigz` pipe — it compresses in parallel, whereas the built-in gzip is
 single-threaded:
 
 ```bash
-pigz -dc 0_bits.tsv.gz | results/bin/bits_to_text -n 12600 --delimiter tab | pigz > 0_text.tsv.gz
+pigz -dc 0_bits.tsv.gz | results/bin/bits_to_text -n 10000 --delimiter tab | pigz > 0_text.tsv.gz
 ```
 
 When encoding, any value other than `0` counts as present, so a raw-count matrix
@@ -334,7 +334,7 @@ for a compressed export.
 | `--kmer_count_memory` | `128.GB` | **Scheduler** memory request per KMER_COUNT job (the SLURM `--mem`, and the cgroup ceiling it enforces). Dot notation: `120.GB`, `256.GB`. For a whole node use `--clusterOptions='--mem=0'`. This is a *scheduling* knob — the accumulation budget is auto-sized from it, see `--kmer_count_budget_gb` |
 | `--kmer_count_budget_gb` | `0` (auto) | Stage 1 accumulation budget, in GB. **`0` = auto**: captured at run time from the RAM actually enforced on the job — the cgroup limit, else SLURM env, else `MemTotal` — and set to **70%** of it (the rest is headroom for read batches and worker maps). So it tracks the real node — a shared allocation, an `--mem=0` exclusive node, or a workstation — with no guessing. A positive value forces that budget, still capped at the detected limit so it can't exceed what the cgroup would OOM-kill |
 | `--kmer_count_read_threads` | `2` | Decompress the two mates concurrently (one thread per file). Inflate is the read-phase bottleneck on many-core nodes, so `2` roughly halves it on NVMe / parallel filesystems. Set `1` to serialise on a single spinning disk, where concurrent reads seek-thrash |
-| `--matrix_merge_memory` | `128.GB` | RAM per MATRIX_MERGE job. Use dot notation: `16.GB`, `64.GB`, `128.GB`. The merge needs little (~1.5–2 GB even at 12,600 accessions); the default is generous headroom |
+| `--matrix_merge_memory` | `128.GB` | RAM per MATRIX_MERGE job. Use dot notation: `16.GB`, `64.GB`, `128.GB`. The merge needs little (~1–2 GB even at tens of thousands of accessions); the default is generous headroom |
 | `--kmer_count_time` | `5h` | Wallclock time limit per KMER_COUNT job. Examples: `'2h'`, `'5h'`, `'1d'`, `'2h 30m'` |
 | `--matrix_merge_time` | `10h` | Wallclock time limit per MATRIX_MERGE job. Examples: `'5h'`, `'10h'`, `'1d'`, `'2h 30m'` |
 | `--cleanup` | `true` | Delete Nextflow work directory on successful completion. Pass `--cleanup false` to preserve work dirs for debugging or `-resume` |
@@ -382,7 +382,7 @@ for a compressed export.
 > | accessions | `tab` | `none` | `bits` |
 > |---|---|---|---|
 > | 1,000 | 2,051 B | 1,052 B | 302 B |
-> | 12,600 | 25,251 B | 12,652 B | **3,202 B** |
+> | 10,000 | 20,051 B | 10,052 B | **2,552 B** |
 >
 > The matrix usually dwarfs every intermediate file in this pipeline, so this is
 > the single largest lever on total output size.
@@ -405,7 +405,7 @@ To be able to `-resume` (re-run only the accessions that failed, skipping the on
 1. **`--cleanup false`** — keep the work directory (`-resume` reads its cache; the default `--cleanup true` deletes it).
 2. **`--publish_mode link`** (the default) or **`copy`** — the Stage 1 pack must remain in the work directory for Nextflow to recognise a finished accession. With `--publish_mode move` the pack is moved out, so `-resume` re-runs every accession.
 
-`link` is preferred because it keeps the storage footprint of `move` (no second copy of the ~5 GB-per-accession packs) while still allowing resume; it just requires `--output_dir` and the work directory to be on the same filesystem (the pipeline checks this at launch and tells you if they are not). If they must be on different filesystems, use `--publish_mode copy`.
+`link` is preferred because it keeps the storage footprint of `move` (no second copy of the multi-GB packs) while still allowing resume; it just requires `--output_dir` and the work directory to be on the same filesystem (the pipeline checks this at launch and tells you if they are not). If they must be on different filesystems, use `--publish_mode copy`.
 
 ```bash
 # first run
