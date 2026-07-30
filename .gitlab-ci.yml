@@ -16,6 +16,28 @@ build-container:
   rules:
     - if: $CI_COMMIT_TAG
 
+# Compile the standalone helper tools as STATIC binaries and attach them to the
+# Release, so a user can download a ready-to-run copy without running the pipeline
+# or building the image. Static so they run on an HPC login node or a laptop
+# regardless of its glibc / libstdc++ version. Both are single-file, k-agnostic
+# utilities (kbin_dump reads a pack's k from its footer).
+build-tools:
+  stage: build
+  image: gcc:12
+  rules:
+    - if: $CI_COMMIT_TAG
+  script:
+    - apt-get update && apt-get install -y zlib1g-dev
+    - g++ -std=c++17 -O2 -static -o kbin_dump    src/kbin_dump.cpp
+    - g++ -std=c++17 -O2 -static -o bits_to_text src/bits_to_text.cpp -lz
+    - ldd ./kbin_dump 2>&1 || true       # expect "not a dynamic executable"
+    - ./kbin_dump --help > /dev/null && echo "kbin_dump built"
+  artifacts:
+    paths:
+      - kbin_dump
+      - bits_to_text
+    expire_in: never
+
 # Create a GitLab Release for the tag, once the image has built. The release
 # notes are the matching section of CHANGELOG.md, extracted at build time so the
 # Release page and the changelog cannot drift apart.
@@ -24,6 +46,7 @@ create-release:
   image: registry.gitlab.com/gitlab-org/release-cli:latest
   needs:
     - build-container
+    - build-tools
   rules:
     - if: $CI_COMMIT_TAG
   script:
@@ -44,3 +67,11 @@ create-release:
     tag_name: "$CI_COMMIT_TAG"
     name: "Release $CI_COMMIT_TAG"
     description: release_notes.md
+    assets:
+      links:
+        - name: "kbin_dump (x86-64 Linux, static)"
+          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/kbin_dump?job=build-tools"
+          link_type: other
+        - name: "bits_to_text (x86-64 Linux, static)"
+          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/bits_to_text?job=build-tools"
+          link_type: other

@@ -4,18 +4,24 @@
 // tar archive. Inode cost per task went from 1 + num_bins dirs + 2 x num_bins
 // files (measured 4,502 peak at 1500 bins) to one file.
 //
-// publishDir uses mode 'move', not 'copy': the pack is large (~5 GB per rice
-// accession) and copying would keep a second copy in the work directory until
-// the end of the run — 63 TB of duplication at 12,600 accessions. Moving is
-// safe here because MATRIX_MERGE consumes the published DIRECTORY, not the
-// individual files through a channel (see main.nf).
+// The pack is large (~5 GB per rice accession), so the publish mode is a real
+// trade-off, exposed as --publish_mode (see nextflow.config):
+//   'link' (default) — a hard link: no second copy of the data, and the pack
+//     stays in the work dir so -resume can skip finished accessions. Needs
+//     output_dir and the work dir on one filesystem (main.nf checks this).
+//   'copy' — a second copy in output_dir; -resume works on any layout but keeps
+//     ~2x storage until cleanup.
+//   'move' — no second copy, but the pack leaves the work dir so -resume cannot
+//     skip finished accessions.
+// MATRIX_MERGE consumes the published DIRECTORY, not the packs through a channel
+// (see main.nf), so any of these modes works for the dataflow.
 process KMER_COUNT {
     tag "${accession}"
 
     // k is in the directory name so bin files from different k-mer lengths can
     // never be mixed: they store fixed-width k-mers and are unreadable at any
     // other k. MATRIX_MERGE reads this same path (see main.nf kmer_count_root).
-    publishDir "${params.output_dir}/kmer_count_k${params.kmer_size}", mode: 'move', overwrite: true
+    publishDir "${params.output_dir}/kmer_count_k${params.kmer_size}", mode: params.publish_mode, overwrite: true
 
     input:
         val accession

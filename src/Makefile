@@ -20,7 +20,7 @@ BIN     ?= .
 
 HEADERS = kmer_key.hpp pack_io.hpp bin_store.hpp thread_pool.hpp mem_limit.hpp
 
-all: $(BIN)/kmer_count $(BIN)/matrix_merge $(BIN)/bits_to_text
+all: $(BIN)/kmer_count $(BIN)/matrix_merge $(BIN)/bits_to_text $(BIN)/kbin_dump
 
 $(BIN)/kmer_count: kmer_count_v3.cpp $(HEADERS)
 	$(CXX) $(CXXFLAGS) -o $@ kmer_count_v3.cpp -lz
@@ -31,6 +31,10 @@ $(BIN)/matrix_merge: matrix_merge.cpp $(HEADERS)
 # Standalone; does not depend on k or the key format (a pure text transform).
 $(BIN)/bits_to_text: bits_to_text.cpp
 	$(CXX) $(CXXFLAGS) -o $@ bits_to_text.cpp -lz
+
+# Standalone; reads the pack's k from its footer, so one binary reads any pack.
+$(BIN)/kbin_dump: kbin_dump.cpp
+	$(CXX) $(CXXFLAGS) -o $@ kbin_dump.cpp
 
 # Round-trip one synthetic accession through both stages.
 test: all
@@ -51,6 +55,6 @@ fh.close();import shutil;shutil.copy('$$tmp/T_1.fq','$$tmp/T_2.fq')"; \
 	rm -rf $$tmp; echo "  OK"
 
 clean:
-	rm -f $(BIN)/kmer_count $(BIN)/matrix_merge
+	rm -f $(BIN)/kmer_count $(BIN)/matrix_merge $(BIN)/bits_to_text $(BIN)/kbin_dump
 
 .PHONY: all test clean

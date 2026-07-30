@@ -52,8 +52,12 @@ def helpMessage() {
                                  To request all node RAM: --clusterOptions='--account=k10226 --mem=0'
                                  (--mem=0 takes precedence over --kmer_count_memory/--matrix_merge_memory)
         --singularity_cache_dir  Local path for Singularity image cache             [default: .singularity/]
+        --queue_size             Max SLURM jobs submitted (queued+running) at once  [default: ${params.queue_size}]
         --cleanup                Delete work dirs on successful completion           [default: true]
                                  Disable with --cleanup false to preserve work dirs for debugging or resume.
+        --publish_mode           How Stage 1 packs reach output_dir:                [default: link]
+                                 link (hardlink; enables -resume, same filesystem), copy (~2x storage),
+                                 or move (lowest footprint, no -resume).
 
     Profiles:
         -profile standard           Run locally
@@ -212,6 +216,29 @@ workflow {
         exit 1, "ERROR: --encoding bits is presence/absence only; it cannot be combined with --count y."
     if (params.encoding == 'text' && params.delimiter == 'none' && params.count == 'y')
         exit 1, "ERROR: --delimiter none cannot be combined with --count y (multi-digit counts would be unparseable). Use --delimiter tab or space."
+
+    // Validate the publish mode, and for 'link' fail here if output_dir and the
+    // work dir are on different filesystems. A hard link cannot cross filesystems,
+    // so Nextflow would otherwise fail the FIRST pack publish mid-run with a
+    // cryptic error; this stops at launch with the fix (use --publish_mode copy).
+    if (!(params.publish_mode in ['link', 'copy', 'move']))
+        exit 1, "ERROR: --publish_mode must be 'link', 'copy' or 'move' (got '${params.publish_mode}')."
+    if (params.publish_mode == 'link') {
+        def outDev = null, workDev = null
+        try {
+            def devOf = { p ->
+                def f = new File(p.toString())
+                while (f != null && !f.exists()) f = f.parentFile   // nearest existing ancestor
+                f == null ? null : java.nio.file.Files.getAttribute(f.toPath(), 'unix:dev')
+            }
+            outDev  = devOf(params.output_dir)
+            workDev = devOf(workflow.workDir)
+        } catch (Exception e) { /* cannot determine filesystems; let Nextflow surface any link error */ }
+        if (outDev != null && workDev != null && outDev != workDev)
+            exit 1, "ERROR: --publish_mode 'link' needs --output_dir and the work dir on the same filesystem, " +
+                    "but they are on different ones (output_dir=${params.output_dir}, work=${workflow.workDir}). " +
+                    "Use --publish_mode copy, or point --output_dir at the same filesystem as the work dir."
+    }
 
     // Resolve to absolute paths — relative inputs break inside Singularity
     // containers and SLURM work directories

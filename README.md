@@ -200,7 +200,8 @@ FASTA input (single- or multi-line records) is also accepted and is detected fro
 results/
 ├── run_manifest.txt              # parameters this results directory was produced with
 ├── bin/
-│   └── bits_to_text              # compiled converter for the bit-packed matrices
+│   ├── bits_to_text             # convert the bit-packed matrix to/from text
+│   └── kbin_dump                # inspect or export a .kbin pack (reads any k)
 ├── kmer_count_k<k>/
 │   └── <accession>.kbin          # one self-indexed pack file per accession
 ├── matrix/
@@ -226,8 +227,11 @@ accession, written as hex — about 8× smaller than tab-separated text, but not
 directly readable by tools that expect columns. `bits_to_text` converts between
 the two forms, **both ways**.
 
-Every run compiles a copy to `results/bin/bits_to_text`, so a results directory
-ships with the tool that reads it. A portable Python version,
+A **prebuilt static (x86-64 Linux) binary is committed under
+[`tools/bin/bits_to_text`](tools/bin)**, and the same binary is attached to each
+tagged release, so you can run it without the pipeline. Every run also compiles a
+copy to `results/bin/bits_to_text`, so a results directory ships with the tool
+that reads it. A portable Python version,
 `tools/bits_to_text.py`, has the identical interface and output (the C++ one is
 ~14× faster on large matrices; build it standalone with `make -C src bits_to_text`).
 
@@ -273,6 +277,44 @@ When encoding, any value other than `0` counts as present, so a raw-count matrix
 
 ---
 
+## Inspecting Stage 1 packs (`kbin_dump`)
+
+Each accession's Stage 1 output is a binary `.kbin` pack
+(`kmer_count_k<k>/<accession>.kbin`) holding its k-mers for every bin. `kbin_dump`
+reads a pack and either prints a summary or writes its k-mers as text, one
+`<kmer><TAB><count>` line per record. It reads `k` from the pack's own footer, so
+**one binary reads a pack of any k**. You do not have to run the pipeline to get
+it: a **prebuilt static (x86-64 Linux) binary is committed under
+[`tools/bin/kbin_dump`](tools/bin)**, and the same binary is attached to each
+tagged release, so it is ready to run on a login node or laptop. Every run also
+ships a copy to `results/bin/kbin_dump`, and you can build it standalone with
+`make -C src kbin_dump`.
+
+```bash
+# peek: header summary (k, bins, record width, k-mer totals)
+results/bin/kbin_dump results/kmer_count_k51/ERS467753.kbin --info
+
+# export every k-mer to text (pipe to pigz to compress a large dump)
+results/bin/kbin_dump results/kmer_count_k51/ERS467753.kbin | pigz > ERS467753.kmers.tsv.gz
+
+# just one bin, with a bin-index column
+results/bin/kbin_dump results/kmer_count_k51/ERS467753.kbin --bin 42 --with-bin
+```
+
+**Options**
+
+| flag | meaning |
+|---|---|
+| `--info` | print a header summary (k, version, bins, record width, k-mer totals) and exit |
+| `--bin N` | dump only bin N |
+| `--with-bin` | prepend a `<bin><TAB>` column to each row |
+
+The k-mers come out canonicalised and sorted within each bin, exactly as Stage 2
+reads them. Output is plain text (no gzip is built in), so pipe to `gzip` or `pigz`
+for a compressed export.
+
+---
+
 ## Parameters
 
 | Parameter | Default | Description |
@@ -296,7 +338,9 @@ When encoding, any value other than `0` counts as present, so a raw-count matrix
 | `--kmer_count_time` | `5h` | Wallclock time limit per KMER_COUNT job. Examples: `'2h'`, `'5h'`, `'1d'`, `'2h 30m'` |
 | `--matrix_merge_time` | `10h` | Wallclock time limit per MATRIX_MERGE job. Examples: `'5h'`, `'10h'`, `'1d'`, `'2h 30m'` |
 | `--cleanup` | `true` | Delete Nextflow work directory on successful completion. Pass `--cleanup false` to preserve work dirs for debugging or `-resume` |
+| `--publish_mode` | `link` | How each Stage 1 pack reaches `output_dir`. `link`: hard link — no second copy of the data and `-resume` can skip finished accessions, but `output_dir` and the work dir must be on the **same filesystem** (checked at launch). `copy`: a second copy, works on any layout at ~2× storage. `move`: no second copy but `-resume` cannot skip finished accessions. See *Resuming a run* below |
 | `--clusterOptions` | _(none)_ | Extra SLURM flags passed to every job (see note below) |
+| `--queue_size` | `200` | Maximum number of jobs the SLURM executor keeps submitted (queued + running) at once |
 | `--singularity_cache_dir` | `./.singularity` | Local path for Singularity image cache |
 
 > **`--clusterOptions` syntax:** because the value starts with `--`, you must use the `=` form to prevent Nextflow misinterpreting it as a flag:
@@ -351,6 +395,26 @@ When encoding, any value other than `0` counts as present, so a raw-count matrix
 > **`--threshold` is a minor-allele-frequency filter, not a count filter.** It is applied to the number of accessions in which a k-mer occurs — *not* to the k-mer's count within an accession. It is two-sided: `--threshold 20` keeps k-mers found in at least 20 accessions **and** in at most `num_accessions - 20`, discarding both rare and near-ubiquitous k-mers, since neither carries usable association signal. The default of `0` disables the filter entirely, on the assumption that downstream analysis applies its own MAF cutoff.
 
 > **Core k-mers are excluded from the matrix by design.** With `--core y`, k-mers present in *every* accession are written to `<bin>_core.txt.gz` and omitted from `<bin>_matrix.tsv.gz`. They are invariant across the panel, so they carry no association signal — this file is a record of them, not an additional part of the matrix. Note the consequence: with any `--threshold` ≥ 1, the core file and the matrix are wholly disjoint.
+
+---
+
+## Resuming a run
+
+To be able to `-resume` (re-run only the accessions that failed, skipping the ones that finished), two things are needed:
+
+1. **`--cleanup false`** — keep the work directory (`-resume` reads its cache; the default `--cleanup true` deletes it).
+2. **`--publish_mode link`** (the default) or **`copy`** — the Stage 1 pack must remain in the work directory for Nextflow to recognise a finished accession. With `--publish_mode move` the pack is moved out, so `-resume` re-runs every accession.
+
+`link` is preferred because it keeps the storage footprint of `move` (no second copy of the ~5 GB-per-accession packs) while still allowing resume; it just requires `--output_dir` and the work directory to be on the same filesystem (the pipeline checks this at launch and tells you if they are not). If they must be on different filesystems, use `--publish_mode copy`.
+
+```bash
+# first run
+nextflow run main.nf -profile slurm_container --cleanup false \
+    --accessions_file accessions.txt --data_dir /path/to/fastq
+# if some jobs failed, resume — finished accessions are skipped
+nextflow run main.nf -profile slurm_container --cleanup false -resume \
+    --accessions_file accessions.txt --data_dir /path/to/fastq
+```
 
 ---
 
@@ -451,7 +515,7 @@ docker build -t ghcr.io/mjfi2sb3/kmer-gwas-cpp:<tag> .
 docker push ghcr.io/mjfi2sb3/kmer-gwas-cpp:<tag>
 ```
 
-New images are built and pushed automatically via GitLab CI when a git tag is pushed (see `.gitlab-ci.yml`).
+New images are built and pushed automatically by CI when a git tag is pushed (see `.gitlab-ci.yml`).
 
 ---
 

@@ -10,6 +10,7 @@ build/
 src/kmer_count
 src/matrix_merge
 src/bits_to_text
+src/kbin_dump
 
 # Data files
 data/

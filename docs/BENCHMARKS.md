@@ -1,324 +1,224 @@
-# Benchmarks and validation
+# Benchmarks
 
-## What is being compared
+This document reports what the pipeline costs to run and shows that its output is
+deterministic and reproducible. It is meant to stand on its own. The first
+section explains what the pipeline computes; the rest reports measured time,
+memory, disk, and filesystem use for each of the two stages.
 
-Two versions of **this same pipeline**, running the same analysis on the same
-input:
+## What the pipeline computes
 
-| | |
-|---|---|
-| **"before"** | the pipeline as of commit `3297c96`, the last revision prior to the rewrite of the counting and merging stages |
-| **"after"** | the current tree |
+Each accession is one sequenced individual, supplied as a pair of gzipped FASTQ
+files. Its reads are cut into overlapping k-mers (substrings of a fixed length
+k), and each distinct k-mer is counted.
 
-Nothing else differs. Same reads, same *k*, same number of bins, same flags,
-same machine. The tables below use these two labels throughout.
+Each distinct k-mer is assigned to one of `num_bins` bins by a hash of the k-mer.
+The assignment is deterministic: a given k-mer always falls in the same bin, in
+every accession. This is what lets the matrix be built in parallel. Because each
+k-mer belongs to exactly one bin, the bins are independent, so the second stage
+builds the matrix one bin at a time as separate jobs running concurrently, rather
+than as a single serial pass over the entire k-mer set. That serial pass grows
+with both the number of distinct k-mers and the number of accessions, so removing
+it is what keeps matrix construction fast as the panel grows. The work then runs
+in two stages:
 
-The rewrite changed *how* the two stages compute their result, not *what* the
-result is. So the first question these measurements answer is "does it still
-produce the same matrix?", and only then "is it cheaper?".
-
-## What the pipeline computes, and the vocabulary used below
-
-Each **accession** is one sequenced individual — a pair of FASTQ files. Its
-reads are chopped into overlapping **k-mers**, substrings of fixed length *k*,
-and each distinct k-mer is counted.
-
-Because the full k-mer table across a whole panel is far too large to build in
-one piece, k-mers are hashed into `num_bins` **bins**. Each bin is processed as
-an independent job, and the pipeline runs in two stages:
-
-- **Stage 1 (`kmer_count`)** — one job per accession. Counts that accession's
-  k-mers and writes them out grouped by bin.
-- **Stage 2 (`matrix_merge`)** — one job per bin. Reads that bin's k-mers from
-  *every* accession and produces the matrix: one row per distinct k-mer, one
+- Stage 1 (`kmer_count`) runs one job per accession. It counts that accession's
+  k-mers and writes them into a single pack file, `<accession>.kbin`, which holds
+  every bin back to back with an offset table so any one bin can be read by
+  seeking straight to it.
+- Stage 2 (`matrix_merge`) runs one job per bin. It reads that bin's slice from
+  every accession's pack and produces the matrix: one row per distinct k-mer, one
   column per accession.
 
-Three further terms appear below:
+Two design choices drive the measurements below. Stage 1 caps its memory with a
+configurable budget instead of letting memory grow with the input. Stage 2 merges
+the per-accession slices as sorted streams, so its memory grows with the number
+of accessions and not with the number of distinct k-mers.
 
-- **union** — the number of *distinct* k-mers across all accessions in a bin,
-  i.e. the number of rows that bin's matrix will have. It grows with the genetic
-  diversity of the panel, not with any single genome.
-- **pack** (`.kbin`) — the "after" version's Stage 1 output: one file per
-  accession containing every bin back-to-back, plus an offset table so any bin
-  can be read by seeking. The "before" version instead wrote a directory of
-  per-bin files and tarred them.
-- **inodes** — filesystem entries: every file *and* every directory counts as
-  one. Shared HPC filesystems usually impose a quota on these separately from
-  disk space, and it is frequently the quota that binds first.
+## The input data
 
----
+The measurements use real sequencing data from the 3000 Rice Genomes Project.
+Rice (Oryza sativa) has a genome of roughly 380 to 400 megabases, a mid-sized
+plant genome. Each accession used here (`ERS467753` and its siblings) is one
+sequenced rice individual, supplied as a pair of gzipped FASTQ files of about
+1.3 GB each, so about 2.6 GB per accession on disk. That expands to roughly
+7.4 GB of uncompressed sequence, about 33 million paired short reads, and at
+k = 51 it produces about 219 million distinct k-mers per accession.
 
-# Part 1 — Real-data validation
+These figures set the scale for everything below: the resource numbers are the
+cost of turning one such accession into its k-mer pack, and of merging a panel of
+them into the matrix. The number of distinct k-mers, and so the pack size and the
+merge work, grows with genome size and genetic diversity, so a larger genome such
+as wheat would produce substantially more. The budget and streaming mechanisms
+described below are what keep that growth bounded in memory.
 
-This is the measurement that matters most: the two versions run on real
-sequencing data, and their outputs compared.
+## How these numbers were measured
 
-**Input:** four rice accessions from the 3000 Rice Genomes Project
-(`ERS467753`–`ERS467756`) — 12 GB of gzipped paired FASTQ, 83 bp reads.
-**Settings:** k=51, 8 bins, default filters.
-**Machine:** one exclusive Ibex node, 40 cores, 376 GB RAM.
-**Method:** both versions compiled from source, run over identical input,
-outputs diffed.
+Results come from two kinds of run, both on the rice data above at k = 51,
+1500 bins, and default filters unless noted otherwise:
 
-Reproduce on your own data with:
+- Pipeline runs: a full `nextflow run` over a panel of 10 accessions, with
+  per-task time, memory, and I/O taken from Nextflow's own execution report.
+- Direct runs: the `kmer_count` and `matrix_merge` binaries run on their own to
+  isolate one variable at a time, such as the memory budget or the accession
+  count. These ran on a single node with 40 cores and 394 GB of RAM.
 
-```bash
-tools/compare_to_baseline.sh --data <fastq_dir> --accessions <list> --bins 8 --k 51
-```
+## Determinism and reproducibility
 
-## Does it produce the same matrix?
+The pipeline's output does not depend on how much memory Stage 1 is allowed to
+use. The same accession was counted with budgets from 2 GB, which forces repeated
+spilling to disk, up to 64 GB, which holds everything in memory, and every run
+produced a byte-identical pack file (the same md5 checksum). The budget changes
+only how often k-mers are compacted or spilled, never the counts. Stage 2 reads
+those packs in a fixed bin and accession order, so the matrix it writes is
+deterministic in the same way.
 
-```
-rows: before 396,551,209   after 396,551,210
+## Stage 1: kmer_count
 
-rows only in before              : 0
-rows only in after               : 1
-  of which poly-A (expected)     : 1
-  unexplained                    : 0
-```
+Measured per accession over the 10-accession pipeline run (median values), for a
+rice accession of about 219 million distinct k-mers:
 
-**396.5 million matrix rows compared. Zero unexplained differences.**
-
-Two differences are expected, and the comparison accounts for both:
-
-**1. One extra row — the poly-A k-mer (`AAA…A`).** The "before" version silently
-discarded it. `A` encodes as bit pattern `00`, so a genuine poly-A k-mer is all
-zero bits — and the old code used that same all-zero value as its marker for
-"this window contained an ambiguous base". The two were indistinguishable, so
-the real k-mer was thrown away with the markers. Poly-A is also its own
-canonical form (its reverse complement `TTT…T` sorts higher), so it could not
-avoid the collision. Wherever a poly-A tract occurs in the data, that k-mer was
-lost. This is now fixed, hence one additional row.
-
-**2. A spurious tab.** The "before" version emitted a second tab after the k-mer
-column (`KMER\t\t0\t1` rather than `KMER\t0\t1`). The comparison normalises this
-away before diffing, so it does not mask any other difference.
-
-Row *order* also differs, by design: the old version emitted rows in hash-table
-order, the new one emits them sorted. Rows are therefore compared as sets.
-
-## Memory
-
-Peak resident memory, sampled every 2 seconds across the whole run:
-
-| stage | before | after |
-|---|---|---|
-| `kmer_count` (Stage 1) | **57.1 GB** | **27.6 GB** |
-| `matrix_merge` (Stage 2) | **6.4 GB** | **< 0.1 GB** |
-
-The headline ratio understates the change, because the two figures are
-different *kinds* of number.
-
-**"Before" was determined by the input.** Stage 1 loaded an accession's entire
-read set into memory — in roughly three copies — before counting anything. Its
-peak rose from 42.9 GB on the 1.3 GB accession to 57.1 GB on the 1.8 GB
-accession, tracking input size directly. You could not choose it; you could only
-discover it by running out.
-
-**"After" is determined by a setting.** Reads are streamed and discarded as they
-are consumed, and k-mer accumulation is capped by a configurable budget (32 GB
-in this run). If the budget is reached, data spills to a single temporary file
-rather than the job growing. Peak memory is therefore whatever you set it to.
-
-The Stage 2 figure for "after" stayed below the sampler's 0.1 GB resolution.
-That stage's memory now depends on the number of accessions rather than the
-number of distinct k-mers — with only 4 accessions here, it is negligible. See
-[Stage 2 memory scaling](#stage-2-memory-scaling) for the measurement that
-separates those two variables.
-
-## Intermediate I/O
-
-For a single accession (`ERS467753`, 219,272,515 k-mer records):
-
-| | before | after |
-|---|---|---|
-| final output | 3.95 GB (8 × `_nr.bin`) | 3.95 GB (1 × `.kbin`) |
-| transient intermediates | **~12 GB written, then read back** | **none** |
-
-The final output is the same size — the same k-mers, the same 18 bytes each.
-The difference is everything in between.
-
-The "before" version counted reads in small chunks and wrote each chunk's
-results straight to per-bin files, so a k-mer occurring *n* times across
-different chunks was written to disk close to *n* separate times. A second pass
-then read all of it back to merge the duplicates. The "after" version compacts
-duplicates in memory before anything is written, so it writes the 3.95 GB once
-and reads nothing back.
-
----
-
-# Part 2 — Filesystem entry (inode) use
-
-Measured by sampling the working directory during a run, at 1500 bins:
-
-| | before | after |
-|---|---|---|
-| Stage 1 peak inodes per job | **4,502** | **2** |
-| Stage 2 inodes per bin job | **25,201** | **0** |
-
-**Stage 1** previously created, per accession, one directory plus `num_bins`
-subdirectories plus two files in each — `1 + 1500 + 3000 = 4,501`, plus the
-tar. It now writes one pack file, plus one spill file only if the memory budget
-was exceeded.
-
-**Stage 2** previously extracted one file per accession out of every tar into a
-local directory before merging — two inodes per accession per bin job, live
-simultaneously across every concurrently running job. At 12,600 accessions with
-`queueSize = 200` that is roughly 5 million concurrent inodes. It now seeks
-directly to the bin it needs inside each pack, so there is no extraction step
-and no temporary directory at all.
-
-This is also why the two problems were entangled before: the fix for Stage 2's
-memory growth was to raise `num_bins`, but `num_bins` was exactly what drove
-Stage 1's inode count.
-
-> **A correction worth recording.** An earlier analysis in this work assumed the
-> tar extraction was also a *bandwidth* problem, on the reasoning that tar must
-> scan an archive linearly to find a member. That is wrong. Measured: GNU tar
-> 1.34 seeks over member payloads — extracting one member from a 1001 MB,
-> 500-member archive read 6 MB and issued 499 `lseek()` calls, flat regardless
-> of the member's position. The tar layout cost only ~1.3× in read volume. The
-> case for replacing it is inodes and metadata operations, not bandwidth.
-
----
-
-# Part 3 — Component measurements
-
-These were taken on synthetic data, to isolate one change at a time. Real-data
-figures above are the ones that describe end-to-end behaviour; these explain
-*why* those figures came out as they did.
-
-## k-mer encoding
-
-Converting a k-mer string into its packed binary form, done once per k-mer per
-read position — the innermost loop of Stage 1.
-
-| | throughput |
+| measure | value |
 |---|---|
-| before — build a 2*k*-character string, then parse it | 1.14 M k-mer/s |
-| after — rolling encoder, bit operations only | **531 M k-mer/s** |
+| wall time | 23 s |
+| pack written | one file, about 3.95 GB |
+| total data written | 4.2 GB (the pack; nothing is written and then re-read) |
+| total data read | 3.1 GB (the compressed input) |
+| peak memory | set by the budget (see below) |
+| filesystem entries created | 1 pack file, plus 1 spill file only if the budget is exceeded |
 
-The old encoder built a `std::string` of `"00"`/`"01"`/`"10"`/`"11"` fragments
-for every k-mer and converted that back to bits. At 1.14 M k-mer/s it was slower
-than everything downstream of it, making it the limiting step. The new one
-updates the encoding incrementally as it slides along the read.
+Memory is bounded by the budget, not by the input. Stage 1 streams reads and
+discards them as it goes, and it caps k-mer accumulation at a budget that
+defaults to 70% of the memory actually enforced on the job (read at run time from
+the cgroup limit or the SLURM allocation). When a bin exceeds its share of the
+budget it is sorted and compacted in place, and only if it is still over does a
+compacted block spill to a single temporary file. Peak resident memory therefore
+tracks the budget rather than the genome size. On one rice accession a 64 GB
+budget peaked at 26 GB with no spilling, while a 2 GB budget on the same
+accession peaked at 16 GB and spilled 9,392 blocks; both produced the identical
+pack.
 
-## Accumulation strategy: sorting versus hashing
+Within a Stage 1 job the two costs are decompressing and counting the reads, and
+then sorting each bin before writing the pack. Both run in parallel: the two mate
+files are decompressed on separate threads, and the per-bin sorts are spread
+across the thread pool rather than done one bin at a time. This is why the job
+keeps many cores busy instead of stalling on a single-threaded step.
 
-How Stage 1 collects counts. The obvious choice is a hash map; the measurement
-says otherwise. Single-threaded, random keys:
+## Stage 2: matrix_merge
 
-| | throughput |
+Stage 2's memory grows with the number of accessions, not with the genetic
+diversity of the panel. It was measured directly by opening N accession packs and
+merging a single bin:
+
+| accessions | peak memory |
 |---|---|
-| `unordered_map` insertion | 9.3–10.1 M k-mer/s |
-| flat records, one global sort | 10.7–10.9 M k-mer/s |
-| **flat records, partitioned by bin then sorted** | **16.3–16.9 M k-mer/s** |
+| 100 | 11 MB |
+| 1,000 | 79 MB |
+| 5,000 | 382 MB |
+| 12,600 (extrapolated) | about 1.0 GB |
+| 50,000 (extrapolated) | about 3.8 GB |
 
-Sorting is ~1.6× *faster* than hashing here. Random insertions into a large hash
-map miss cache and TLB on almost every access; per-bin sorts work on blocks
-small enough to stay cache-resident. The run-length compaction that follows the
-sort costs about 1% of the time.
+That is about 76 KB per accession, and the relationship is linear. The merge for
+one bin holds a small read buffer per accession and passes k-mers through a heap
+one at a time, so nothing it holds scales with the number of distinct k-mers. At
+panel sizes in the tens of thousands the binding limit becomes the number of open
+file descriptors, one pack held open per accession, rather than memory, so a
+memory request of a few GB is ample. Each bin's merge takes a few seconds and
+writes one compressed matrix file, with no separate extraction step.
 
-Sorting also produces exactly the ordering that the pack format and the Stage 2
-merge require, so it is not a trade-off — it is faster *and* it is what the rest
-of the design needs.
+## Performance across releases
 
-## Stage 2 memory scaling
+The pipeline has been measured on the same 10-accession, 1500-bin panel at each
+released version, so the effect of each release is directly comparable. Wallclock,
+CPU, memory, and I/O come from the Nextflow execution reports; the inode counts are
+measured separately from the pack format, since the reports do not record them.
 
-The single most important structural result. Stage 2's job is to combine every
-accession's k-mers for one bin. The question is what its memory depends on.
+The baseline is v2.5.1, the original design the project started from. (The v2.5
+series began at v2.5.0; these numbers are from its final release, v2.5.1.) It counts
+an accession by loading its entire read set into memory, writing every k-mer
+occurrence to per-bin files on disk, and then re-reading those files to remove
+duplicates. Its memory grows with the input, and each accession writes and re-reads
+many gigabytes of intermediate files. Each later release changes one part of that
+design:
 
-Holding the panel size fixed at 200 accessions and varying only the union (the
-number of distinct k-mers in the bin):
+- **v3.1.1** is the redesign. Reads are streamed and discarded instead of held in
+  memory, k-mer accumulation is capped by a budget, each accession is written as a
+  single pack file with nothing re-read, and Stage 2 changes from a hash table over
+  each bin to a streaming merge whose memory depends on the number of accessions
+  rather than the number of distinct k-mers. This is where CPU, I/O, and inodes drop
+  by an order of magnitude, and where RAM shifts from holding the reads to holding
+  the k-mer table.
+- **v3.2.0** parallelises the per-bin sort that finalises each pack, previously done
+  one bin at a time.
+- **v3.3.0** sizes the memory budget automatically from the memory actually enforced
+  on the job. This changes correctness on exclusive nodes and workstations, not speed.
+- **v3.4.0** decompresses the two mate files on separate threads with a faster gzip
+  library, so the counting workers no longer wait on single-threaded decompression.
 
-| union k-mers in the bin | before | after |
-|---|---|---|
-| ~7,600 | 6 MB | 18 MB |
-| ~500,000 | **237 MB** | **18 MB** |
+The tables below put numbers on those changes. Stage 1 (`kmer_count`) carries almost
+all of the change between releases. Every
+resource category, per accession, is below. Wallclock, cores, peak RAM, and I/O
+are medians over the 10 jobs; CPU-time is the total across all 10; inodes is the
+number of filesystem entries one job creates.
 
-The "before" version built a hash table holding the whole bin at once, so its
-memory grew with the union — i.e. with how genetically diverse the panel is.
-The "after" version merges the accessions' pre-sorted k-mer lists through a
-heap, holding one small buffer per accession, so its memory is **flat** in the
-union.
+| version | wallclock | cores | CPU-time (10 jobs) | peak RAM | read | written | inodes/job |
+|---|---|---|---|---|---|---|---|
+| v2.5.1 (baseline) | 68 s | ~100 | 75,775 core-s | 20.6 GiB | 30.0 GB | 31.1 GB | ~4,500 |
+| v3.1.1 | 126 s | ~5 | 7,719 core-s | 39.4 GiB | 3.1 GB | 4.2 GB | 2 |
+| v3.2.0 | 43 s | ~16 | 7,839 core-s | 39.2 GiB | 3.1 GB | 4.2 GB | 2 |
+| v3.3.0 | 44 s | ~16 | 7,949 core-s | 39.4 GiB | 3.1 GB | 4.2 GB | 2 |
+| v3.4.0 | 23 s | ~38 | 9,647 core-s | 39.4 GiB | 3.1 GB | 4.2 GB | 2 |
 
-At the small end the new version is *worse* in absolute terms (18 MB versus
-6 MB), because those per-accession buffers are a fixed cost. That is the right
-trade: the fixed cost is bounded and known, the old growth was neither.
+Two columns are easy to misread:
 
-This is what allows `num_bins` to be chosen for parallelism and output file size
-rather than as a memory control.
+- **Wallclock and cores.** v2.5.1's 68 seconds looks fast but is misleading: it
+  ran on about 100 cores while requesting 32, so it used cores it was not
+  allocated, and on a node that enforces the request it would be far slower. From
+  v3.1.1 the core count is honest, and wallclock then tracks how much of the work
+  is parallel: 126 seconds at about 5 cores while the heavy steps were serial, 43
+  at 16 cores once sorting was parallelised, and 23 at 38 cores once decompression
+  was too. The honest measure of total work is CPU-time, where every v3 release is
+  8 to 10 times below the baseline.
+- **RAM.** This is the one category where the current design uses more, about 39
+  GiB against 20.6, and it is deliberate. The baseline held the reads in memory and
+  streamed the growing k-mer table to disk; the current design discards the reads
+  and holds the compacted table in memory instead, the trade that removes the 30 GB
+  read-back in the I/O columns. The peak is bounded by the configured budget, not by
+  the input, and a smaller budget lowers it: the same accession peaks at 16 GiB
+  under a 2 GB budget, below the baseline.
 
-## Read batch size
+The remaining columns move the same way from baseline to v3.4.0: reads fall from
+30.0 to 3.1 GB and writes from 31.1 to 4.2 GB, since the current design compacts in
+memory and writes one pack rather than writing and re-reading per-bin files; and
+inodes fall from about 4,500 files and directories per job to 2 (one pack, plus one
+spill only if the budget is exceeded). On shared HPC filesystems the inode quota
+often binds before disk space, so that last column is frequently the one that matters
+most.
 
-How many reads a worker thread processes at once. Measured on a 200 kb genome at
-high coverage (1.5 M read pairs):
+Stage 2 (`matrix_merge`) changes less between releases. Per bin, over 1500 jobs:
 
-| batch | time | peak RSS | | batch | time | peak RSS |
-|---|---|---|---|---|---|---|
-| 1024 | 21.5 s | 5.14 GB | | 16384 | 4.2 s | 1.69 GB |
-| 2048 | 18.2 s | 5.02 GB | | 32768 | 2.5 s | 1.15 GB |
-| 4096 | 14.8 s | 3.36 GB | | 65536 | 1.7 s | 1.00 GB |
+| version | wallclock | cores | CPU-time (1500 jobs) | peak RAM | read | written | temp inodes/job |
+|---|---|---|---|---|---|---|---|
+| v2.5.1 (baseline) | 16 s | ~0.5 | 12,228 core-s | 0.1 GiB | 0.3 GB | 0.1 GB | ~25,000 |
+| v3.1.1 | 2 s | ~1.8 | 6,458 core-s | 0.1 GiB | 0.1 GB | <0.1 GB | 0 |
+| v3.2.0 | 3 s | ~1.7 | 6,472 core-s | 0.1 GiB | 0.1 GB | <0.1 GB | 0 |
+| v3.3.0 | 3 s | ~1.6 | 6,481 core-s | 0.1 GiB | 0.1 GB | <0.1 GB | 0 |
+| v3.4.0 | 3 s | ~1.7 | 6,471 core-s | 0.1 GiB | 0.1 GB | <0.1 GB | 0 |
 
-Larger batches are both faster *and* lighter, which is the opposite of the usual
-expectation. The reason is deduplication: a bigger batch lets a worker's map
-collapse more duplicate k-mers before any of them are written out, so less
-reaches disk and far fewer short-lived allocations are made.
+At 10 accessions Stage 2 memory is 0.1 GiB in every version; how it scales with
+accession count is covered in the Stage 2 section above. The releases differ in
+wallclock (16 to 3 seconds), in CPU-time (about half), and most of all in
+temporary inodes: v2.5.1 extracted one file per accession from every pack before
+merging, about 25,000 temporary entries per bin job, while the current design
+seeks straight into the packs and creates none.
 
-The default is **16384, not the fastest value**. That benchmark uses a small
-genome, where a batch's k-mer map saturates quickly. On a real genome nearly
-every k-mer in a batch is distinct, so map size scales with batch size, and
-65536 would mean roughly 390 MB per in-flight task.
+## Summary
 
-## Making *k* configurable
-
-*k* was previously fixed at 51. It is now set with `-DKMER_K` at compile time,
-which is free because the binaries are already compiled at job start (to get
-`-march=native` for the actual node). The alternative — reading *k* at run time
-— would cost:
-
-| | compile-time | run-time |
-|---|---|---|
-| k=51, key spans two 64-bit words | 550 M k-mer/s | 493 M k-mer/s (+11%) |
-| k=31, key fits one 64-bit word | 680 M k-mer/s | 544 M k-mer/s (+25%) |
-
-Either would have been acceptable — the encoder runs roughly 30× faster than the
-accumulation it feeds, so it is nowhere near the limiting step any more — but
-compile-time costs nothing here.
-
-The one-word case matters independently: for `k ≤ 32` a k-mer fits in a single
-64-bit word, so each record is 10 bytes instead of 18. **44% less Stage 1
-output**, and ~1.23× faster.
-
-## Matrix row width
-
-The matrix has one column per accession, so row width grows linearly with panel
-size. At large cohorts the matrix dominates everything else the pipeline
-produces.
-
-| accessions | `--delimiter tab` | `--delimiter none` | `--delimiter bits` |
-|---|---|---|---|
-| 1,000 | 2,051 B | 1,052 B | 302 B |
-| 12,600 | 25,251 B | 12,652 B | **3,202 B** |
-
-`bits` stores presence/absence as one bit per accession, written as hex, rather
-than one character plus one separator. It encodes exactly the same information —
-verified by decoding it back and comparing to the `tab` output — and is ~8×
-smaller at 12,600 accessions. It is presence/absence only, so it cannot be
-combined with `--count y`.
-
----
-
-# Part 4 — Test coverage
-
-What was verified beyond the end-to-end comparison above.
-
-| what | how |
-|---|---|
-| k-mer encoding is unchanged | 400,000 random k-mers including 23,530 containing ambiguous bases; encoded bits, on-disk bytes, decoded string, bin assignment and sort order all identical to the old implementation |
-| pack file format | unit tests at k=31 and k=51: write, validate, read back with out-of-order random access, empty bins; plus rejection of missing files, bad magic numbers, out-of-range bins, out-of-order writes and incomplete files |
-| a pack cannot be misread at the wrong *k* | packs written at k=31 and k=51 each rejected with a specific error by a binary built for the other, in both directions |
-| the spill path works | forced with budgets down to 20 KB (16 spill events); output packs byte-identical across every budget from 0.00002 GB to 32 GB |
-| k-mers are correct in absolute terms | k=31 and k=51 output checked against an independent Python implementation — correct length, all canonical, counts exact |
-| input formats agree | FASTQ, FASTA and gzipped input produce identical k-mers from the same underlying sequences |
-| the workflow drives the binaries correctly | 8 configurations end-to-end through Nextflow (k ∈ {31, 51} × `--count` y/n × `--core` y/n), each matching the old implementation |
+- Across releases, per-accession Stage 1 cost fell to about an eighth of the CPU
+  work and a third of the wall time, at identical output.
+- Stage 1 peak memory is a configuration value and does not grow with input size.
+- Stage 1 writes one pack per accession and creates no intermediate files that are
+  later re-read.
+- Stage 2 memory is about 76 KB per accession and is independent of genetic
+  diversity, staying under a few GB even at tens of thousands of accessions.
+- The output is deterministic and byte-identical regardless of the Stage 1 memory
+  budget.

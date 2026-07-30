@@ -4,6 +4,46 @@ All notable changes to this pipeline are documented here.
 Versions follow [semantic versioning](https://semver.org): the major number is
 bumped when output or interfaces change in a backwards-incompatible way.
 
+## v3.5.0
+
+Makes `-resume` usable again without giving up the low storage footprint, exposes
+two more knobs, fixes symlinked input under the container, and adds a pack viewer.
+No output format changes.
+
+### Added
+
+- **`--publish_mode`** (`link` | `copy` | `move`, default `link`). Controls how
+  each Stage 1 pack reaches `output_dir`. `link` hard-links the pack instead of
+  moving it, so the pack also stays in the work dir and **`-resume` can skip
+  finished accessions**, with **no second copy of the data** (one inode). It
+  requires `output_dir` and the work dir on the same filesystem, which is checked
+  at launch (a clear error, not a mid-run failure). `copy` works on any layout at
+  ~2x storage; `move` is the previous behaviour (lowest footprint, no resume).
+- **`--queue_size`** (default 200) — the maximum number of jobs the SLURM
+  executor keeps submitted (queued + running) at once.
+- **`kbin_dump`** — a standalone tool to inspect a Stage 1 `.kbin` pack or export
+  its k-mers as text (`<kmer><TAB><count>`). It reads `k` from the pack's footer,
+  so one binary reads a pack of any k. Shipped to `results/bin/` on every run,
+  committed as a prebuilt static binary under `tools/bin/`, and attached to each
+  tagged release.
+- **Prebuilt static binaries** of `kbin_dump` and `bits_to_text` under
+  `tools/bin/` and as release assets, so they can be used without running the
+  pipeline or compiling.
+
+### Fixed
+
+- **Symlinked FASTQ in `data_dir` now work under the `slurm_container` profile.**
+  Singularity binds `data_dir`, but a symlink's target lives outside it and
+  dangled inside the container; the real target directories are now bound too.
+  (Non-container profiles were unaffected.)
+
+### Changed
+
+- The `mode: 'move'` publish that broke `-resume` is now `--publish_mode` (see
+  above), defaulting to `link`.
+- Documentation: the benchmarks are rewritten as a self-contained, current-state
+  report with a per-release resource comparison across every category.
+
 ## v3.4.0
 
 Speeds up Stage 1 input decompression. No format or interface changes; output is
