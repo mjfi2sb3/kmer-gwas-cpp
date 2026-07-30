@@ -14,9 +14,13 @@ def helpMessage() {
         nextflow run main.nf [options]
 
     Options:
+
+      Input / output
         --accessions_file        Path to file listing accession IDs, one per line   [default: ${params.accessions_file}]
         --data_dir               Directory containing paired FASTQ files            [default: ${params.data_dir}]
         --output_dir             Output directory                                   [default: ${params.output_dir}]
+
+      k-mers and matrix content
         --kmer_size              k-mer length; must be ODD, 15..63                  [default: ${params.kmer_size}]
                                  k <= 32 uses a compact 10-byte record instead of 18,
                                  cutting Stage 1 output by ~44%. Compiled in, so there
@@ -36,27 +40,43 @@ def helpMessage() {
                                  as hex (~8x smaller than tab); requires --count n.
         --core                   'y' = write core k-mers file, 'n' = skip           [default: ${params.core}]
                                  Core k-mers (present in ALL accessions) are excluded
-                                 from the matrix — they carry no association signal.
-        --matrix_merge_cpus      Number of threads for MATRIX_MERGE                 [default: ${params.matrix_merge_cpus}]
+                                 from the matrix; they carry no association signal.
+
+      Stage 1 resources (KMER_COUNT, one job per accession)
         --kmer_count_memory      RAM requested per KMER_COUNT job                    [default: ${params.kmer_count_memory}]
-                                 (a scheduler request; the counting budget auto-sizes
-                                 from it — see --kmer_count_budget_gb)
+                                 A scheduler request; the counting budget auto-sizes
+                                 from it (see --kmer_count_budget_gb).
         --kmer_count_budget_gb   Stage 1 accumulation budget in GB; 0 = auto,       [default: ${params.kmer_count_budget_gb}]
-                                 a fraction of the RAM actually enforced on the job
+                                 a fraction of the RAM actually enforced on the job.
         --kmer_count_read_threads  Decompress the two mate files concurrently       [default: ${params.kmer_count_read_threads}]
-                                 (set 1 for a single spinning disk)
+                                 (set 1 for a single spinning disk).
+        --kmer_count_time        Wallclock time limit for KMER_COUNT                [default: ${params.kmer_count_time}]
+                                 Use a quoted string: '5h', '10h', '1d', '2h 30m'.
+
+      Stage 2 resources (MATRIX_MERGE, one job per bin)
+        --matrix_merge_cpus      CPUs requested per MATRIX_MERGE job                 [default: ${params.matrix_merge_cpus}]
+                                 The merge is single-threaded; these cores compress
+                                 the bin's output matrix with pigz (saturates ~8).
         --matrix_merge_memory    RAM requested per MATRIX_MERGE job                 [default: ${params.matrix_merge_memory}]
                                  Use dot notation: 64.MB, 120.GB, 256.GB
-                                 (NOT '120 GB' — the space form fails on the CLI)
-        --kmer_count_time        Wallclock time limit for KMER_COUNT                [default: ${params.kmer_count_time}]
+                                 (NOT '120 GB'; the space form fails on the CLI).
         --matrix_merge_time      Wallclock time limit for MATRIX_MERGE              [default: ${params.matrix_merge_time}]
-                                 Use quoted string: '5h', '10h', '1d', '2h 30m'
+
+      Scheduler and execution
         --clusterOptions         Extra SLURM options passed to all jobs             [default: none]
                                  Use = syntax: --clusterOptions='--account=myproject --partition=highmem'
                                  To request all node RAM: --clusterOptions='--account=myproject --mem=0'
                                  (--mem=0 takes precedence over --kmer_count_memory/--matrix_merge_memory)
-        --singularity_cache_dir  Local path for Singularity image cache             [default: .singularity/]
         --queue_size             Max SLURM jobs submitted (queued+running) at once  [default: ${params.queue_size}]
+        --max_retries            Retries for an OOM/timeout-killed job (0 = none)   [default: ${params.max_retries}]
+                                 Each retry gets attempt x the base memory and time.
+        --max_memory             Memory ceiling any request is clamped to           [default: ${params.max_memory}]
+        --max_cpus               CPU ceiling any request is clamped to              [default: ${params.max_cpus}]
+        --max_time               Wallclock ceiling any request is clamped to        [default: ${params.max_time}]
+                                 Set --max_memory/--max_cpus/--max_time to your largest node.
+        --singularity_cache_dir  Local path for Singularity image cache             [default: .singularity/]
+
+      Work directory and publishing
         --cleanup                Delete the work dir on successful completion        [default: false]
                                  Default false keeps it so -resume can skip finished work;
                                  set --cleanup true to delete on success (disables -resume).

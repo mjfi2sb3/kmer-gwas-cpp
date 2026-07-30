@@ -2,6 +2,25 @@
 
 A high-performance Nextflow pipeline for genome-wide association studies (GWAS) using k-mer presence/absence or count matrices. Designed for large-scale deployment on HPC clusters with SLURM and Singularity/Apptainer.
 
+## Contents
+
+- [What's new](#whats-new)
+- [Overview](#overview)
+- [Requirements](#requirements)
+- [Quick start](#quick-start)
+- [Input](#input)
+- [Output](#output)
+- [Converting the bit-packed matrix (`bits_to_text`)](#converting-the-bit-packed-matrix-bits_to_text)
+- [Inspecting Stage 1 packs (`kbin_dump`)](#inspecting-stage-1-packs-kbin_dump)
+- [Parameters](#parameters)
+- [Resuming a run](#resuming-a-run)
+- [Execution profiles](#execution-profiles)
+- [Container](#container)
+- [Algorithm](#algorithm)
+- [FASTQ file discovery](#fastq-file-discovery)
+- [Tips](#tips)
+- [Repository structure](#repository-structure)
+
 ---
 
 ## What's new
@@ -96,9 +115,8 @@ The k-mer length now appears in the output directory names, so results produced 
 different *k* cannot be mixed up. Existing intermediate files from previous runs
 are not readable by the new code and should be regenerated.
 
-Full measurements, methodology and test coverage are in
-**[docs/BENCHMARKS.md](docs/BENCHMARKS.md)**. The comparison is reproducible on
-your own data with `tools/compare_to_baseline.sh`.
+Full measurements and methodology are in
+**[docs/BENCHMARKS.md](docs/BENCHMARKS.md)**.
 
 ---
 
@@ -227,8 +245,8 @@ accession, written as hex — about 8× smaller than tab-separated text, but not
 directly readable by tools that expect columns. `bits_to_text` converts between
 the two forms, **both ways**.
 
-A **prebuilt static (x86-64 Linux) binary is committed under
-[`tools/bin/bits_to_text`](tools/bin)**, and the same binary is attached to each
+A **prebuilt static (x86-64 Linux) binary is committed at
+[`tools/bits_to_text`](tools)**, and the same binary is attached to each
 tagged release, so you can run it without the pipeline. Every run also compiles a
 copy to `results/bin/bits_to_text`, so a results directory ships with the tool
 that reads it. A portable Python version,
@@ -284,8 +302,8 @@ Each accession's Stage 1 output is a binary `.kbin` pack
 reads a pack and either prints a summary or writes its k-mers as text, one
 `<kmer><TAB><count>` line per record. It reads `k` from the pack's own footer, so
 **one binary reads a pack of any k**. You do not have to run the pipeline to get
-it: a **prebuilt static (x86-64 Linux) binary is committed under
-[`tools/bin/kbin_dump`](tools/bin)**, and the same binary is attached to each
+it: a **prebuilt static (x86-64 Linux) binary is committed at
+[`tools/kbin_dump`](tools)**, and the same binary is attached to each
 tagged release, so it is ready to run on a login node or laptop. Every run also
 ships a copy to `results/bin/kbin_dump`, and you can build it standalone with
 `make -C src kbin_dump`.
@@ -619,8 +637,10 @@ nextflow run main.nf --help
 │   ├── thread_pool.hpp      # thread pool implementation
 │   └── Makefile             # local build (`make`, `make KMER_K=31`, `make test`)
 ├── tools/
+│   ├── kbin_dump            # prebuilt static binary: inspect/export .kbin packs
+│   ├── bits_to_text         # prebuilt static binary: bit-packed matrix <-> text
 │   ├── bits_to_text.py      # portable Python twin of src/bits_to_text.cpp
-│   └── compare_to_baseline.sh  # validate the pipeline against an earlier revision
+│   └── README.md            # what is in this folder
 ├── Dockerfile               # Container image definition
 ├── .gitlab-ci.yml           # CI/CD pipeline (auto-build + release on tag)
 └── accessions.txt.example   # Example accessions file

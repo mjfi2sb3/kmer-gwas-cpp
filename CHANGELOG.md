@@ -4,6 +4,39 @@ All notable changes to this pipeline are documented here.
 Versions follow [semantic versioning](https://semver.org): the major number is
 bumped when output or interfaces change in a backwards-incompatible way.
 
+## v3.6.0
+
+Adds failure-recovery for large runs, right-sizes the Stage 2 job, and tidies the
+tools and docs. No output format changes.
+
+### Added
+
+- **Automatic retry with resource escalation (SLURM profiles).** A job killed by
+  an out-of-memory or timeout signal is retried with *more* memory and wallclock
+  each attempt (`attempt ×` the base), so the occasional straggler in a large
+  cohort self-heals instead of failing the whole run. New parameters:
+  `--max_retries` (default 2), and `--max_memory` / `--max_cpus` / `--max_time`
+  (defaults 512 GB / 64 / 24h) which set `resourceLimits`, clamping every request
+  — including the escalated retries — to what a node can provide. Set the three
+  ceilings to your largest node.
+
+### Changed
+
+- **`--matrix_merge_cpus` default 32 → 6.** The merge itself is single-threaded;
+  the requested CPUs only compress that bin's output with pigz, which saturates
+  around 8 threads. Requesting 32 left cores idle and, on a shared cluster,
+  reduced how many bins could run at once.
+- **`--matrix_merge_memory` default 128 GB → 16 GB.** The merge's memory is
+  proportional to the number of accessions (~76 KB each), independent of genome
+  size, so 16 GB covers well over 100k accessions for any genome; a rare shortfall
+  is caught by the retry escalation above.
+- **`--help` is reorganised** into labelled groups (input/output, k-mers & matrix,
+  Stage 1 resources, Stage 2 resources, scheduler, work dir & publishing).
+- **The `tools/` folder is flattened.** The prebuilt `kbin_dump` / `bits_to_text`
+  binaries moved from `tools/bin/` up into `tools/`, and the obsolete
+  `compare_to_baseline.sh` was removed.
+- The README now has a table of contents.
+
 ## v3.5.1
 
 Default and documentation fixes.
