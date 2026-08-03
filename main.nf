@@ -38,9 +38,10 @@ def helpMessage() {
         --encoding               Matrix encoding: 'text' or 'bits'                  [default: ${params.encoding}]
                                  'bits' packs presence/absence 1 bit per accession
                                  as hex (~8x smaller than tab); requires --count n.
-        --core                   'y' = write core k-mers file, 'n' = skip           [default: ${params.core}]
-                                 Core k-mers (present in ALL accessions) are excluded
-                                 from the matrix; they carry no association signal.
+        --write_core_kmers       Write k-mers present in ALL accessions to a         [default: ${params.write_core_kmers}]
+                                 per-bin <bin>_core.txt file. Independent of every
+                                 other flag: it only adds this file and never changes
+                                 the matrix. false (default) writes no core file.
 
       Stage 1 resources (KMER_COUNT, one job per accession)
         --kmer_count_memory      RAM requested per KMER_COUNT job                    [default: ${params.kmer_count_memory}]
@@ -100,6 +101,15 @@ if (params.help) {
     exit 0
 }
 
+// Backwards compatibility: --core was renamed to --write_core_kmers in v3.7.2.
+// The value is mapped through in nextflow.config (params are immutable here);
+// this just warns so existing commands keep working. Drop the shim later.
+if (params.core != null) {
+    log.warn "--core is deprecated and was renamed to --write_core_kmers; " +
+             "honouring it as --write_core_kmers ${params.write_core_kmers}. " +
+             "Please switch, as --core will be removed in a future release."
+}
+
 
 // ---------------------------------------------------------------------------
 // Parameter summary
@@ -141,7 +151,7 @@ def paramSummary(String accessions_file, String data_dir) {
         row('count',          params.count),
         row('delimiter',      params.delimiter),
         row('encoding',       params.encoding),
-        row('core',           params.core),
+        row('write_core_kmers', params.write_core_kmers),
         head('Stage 1 resources (KMER_COUNT)'),
         row('kmer_count_memory',       "${params.kmer_count_memory.toGiga()}.GB"),
         row('kmer_count_budget_gb',    budget),
@@ -194,7 +204,7 @@ def writeManifest(String accessions_file, String data_dir, int n_accessions) {
         count               = ${params.count}
         delimiter           = ${params.delimiter}
         encoding            = ${params.encoding}
-        core                = ${params.core}
+        write_core_kmers    = ${params.write_core_kmers}
 
         accessions_file     = ${accessions_file}
         n_accessions        = ${n_accessions}

@@ -4,6 +4,27 @@ All notable changes to this pipeline are documented here.
 Versions follow [semantic versioning](https://semver.org): the major number is
 bumped when output or interfaces change in a backwards-incompatible way.
 
+## v3.7.2
+
+Renames the `--core` flag and corrects its documentation. No output changes, and
+`--core` keeps working as a deprecated alias, so upgrading is safe.
+
+### Changed
+
+- **`--core` renamed to `--write_core_kmers`** (a boolean, default `false`). The
+  flag writes a per-bin `<bin>_core.txt` listing k-mers present in every accession.
+  It is independent of every other flag: it only adds that file and never changes
+  the matrix. The old `--core y` / `--core n` still works but prints a deprecation
+  warning and will be removed in a later release.
+
+### Fixed
+
+- **Corrected the core-k-mers documentation.** The help, README, and code comments
+  previously said core k-mers are "excluded from the matrix," implying this flag
+  removes them. It does not: whether all-accession k-mers appear in the matrix is
+  decided solely by `--threshold` (they are dropped only at `--threshold >= 1`; at
+  the default `0` they remain). The flag only controls the side file.
+
 ## v3.7.1
 
 Fixes a container bind for symlinked reads, enriches the launch banner, and tidies

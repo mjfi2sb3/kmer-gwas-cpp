@@ -35,7 +35,7 @@ process MATRIX_MERGE {
         --delimiter  ${params.delimiter} \\
         --encoding   ${params.encoding} \\
         --count      ${params.count} \\
-        --core       ${params.core} \\
+        --core       ${params.write_core_kmers ? 'y' : 'n'} \\
         --bins       ${params.num_bins} \\
         --threads    ${task.cpus}
 

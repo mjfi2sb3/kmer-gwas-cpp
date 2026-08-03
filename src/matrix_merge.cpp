@@ -404,9 +404,10 @@ void merge_chunk(const uint file_index, const uint min_occur, string input_path,
         touched.reserve(256);
 
         auto write_row = [&](const Key& key, size_t occ) {
-            // Core k-mers (present in every accession) are invariant across the
-            // panel and carry no association signal, so they are recorded
-            // separately and excluded from the matrix.
+            // Optionally record every k-mer present in ALL accessions to the
+            // separate _core.txt file. This is independent of the matrix: it
+            // neither adds nor removes a row here. Whether such k-mers appear in
+            // the matrix is the MAF filter's decision below (via --threshold).
             if (write_core && occ == NUM_ACC)
                 ck_stream << bit_decode(key) << "\n";
             // Two-sided MAF filter: discard both rare and near-ubiquitous k-mers
@@ -723,8 +724,9 @@ int main(int argc, char *argv[])
 		     << "\t\t            hex, ~8x smaller than tab at large cohorts. Ignores\n"
 		     << "\t\t            --delimiter and requires --count n.\n"
 		     << "\t\t--count <print matrix as absence/presence or actual k-mer counts; type: y|n> (default: " << (show_count ? "y" : "n") << ")\n"
-		     << "\t\t--core    <write core k-mers file (_core.txt); type: y|n> (default: n)\n"
-		     << "\t\t            Core = present in ALL accessions; these are excluded from the matrix.\n"
+		     << "\t\t--core    <write k-mers present in ALL accessions to _core.txt; type: y|n> (default: n)\n"
+		     << "\t\t            Independent of the matrix: it only adds the file. Whether such\n"
+		     << "\t\t            k-mers appear in the matrix is set by --threshold, not this flag.\n"
 		     << "\t\t--bins    <number of bins (used in output folder name)> (default: 0)\n"
 		     << "\t\t--threads <parallel merge threads> (default: SLURM_CPUS_PER_TASK if set, else hardware concurrency)\n"
 		     << "\t\t            The bin's key space is split into contiguous shards merged in\n"

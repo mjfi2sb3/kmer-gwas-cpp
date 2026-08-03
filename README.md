@@ -225,7 +225,7 @@ results/
 ├── matrix/
 │   └── matrix_acc<N>_k<k>_bins<B>_minOcc<t>_<mode>_delim-<d>/
 │       ├── <bin>_matrix.tsv.gz   # k-mer matrix for this bin (gzip-compressed)
-│       └── <bin>_core.txt.gz     # core k-mers (if --core y, gzip-compressed)
+│       └── <bin>_core.txt.gz     # k-mers present in all accessions (only if --write_core_kmers, gzip-compressed)
 └── reports/
     ├── timeline.html
     ├── report.html
@@ -347,7 +347,7 @@ for a compressed export.
 | `--count` | `n` | `y` = raw counts, `n` = presence/absence |
 | `--encoding` | `text` | Matrix encoding: `text` (delimited) or `bits` (1 bit per accession as hex, ~8× smaller; presence/absence only). See note below |
 | `--delimiter` | `none` | Value separator for the **text** encoding: `tab`, `space` or `none`. `none` concatenates single characters and is presence/absence only |
-| `--core` | `n` | `y` = write core k-mers file per bin. Core k-mers are **excluded from the matrix** (see note below) |
+| `--write_core_kmers` | `false` | Write a per-bin `<bin>_core.txt` listing k-mers present in **all** accessions. Independent of every other flag: it only adds this file and never changes the matrix (see note below) |
 | `--matrix_merge_cpus` | `16` | Threads for the MATRIX_MERGE stage. The merge runs in parallel (range-sharded, byte-identical output) and these cores also feed pigz; returns diminish past ~8–12 threads |
 | `--kmer_count_memory` | `128.GB` | **Scheduler** memory request per KMER_COUNT job (the SLURM `--mem`, and the cgroup ceiling it enforces). Dot notation: `120.GB`, `256.GB`. For a whole node use `--clusterOptions='--mem=0'`. This is a *scheduling* knob — the accumulation budget is auto-sized from it, see `--kmer_count_budget_gb` |
 | `--kmer_count_budget_gb` | `0` (auto) | Stage 1 accumulation budget, in GB. **`0` = auto**: captured at run time from the RAM actually enforced on the job — the cgroup limit, else SLURM env, else `MemTotal` — and set to **70%** of it (the rest is headroom for read batches and worker maps). So it tracks the real node — a shared allocation, an `--mem=0` exclusive node, or a workstation — with no guessing. A positive value forces that budget, still capped at the detected limit so it can't exceed what the cgroup would OOM-kill |
@@ -412,7 +412,7 @@ for a compressed export.
 
 > **`--threshold` is a minor-allele-frequency filter, not a count filter.** It is applied to the number of accessions in which a k-mer occurs — *not* to the k-mer's count within an accession. It is two-sided: `--threshold 20` keeps k-mers found in at least 20 accessions **and** in at most `num_accessions - 20`, discarding both rare and near-ubiquitous k-mers, since neither carries usable association signal. The default of `0` disables the filter entirely, on the assumption that downstream analysis applies its own MAF cutoff.
 
-> **Core k-mers are excluded from the matrix by design.** With `--core y`, k-mers present in *every* accession are written to `<bin>_core.txt.gz` and omitted from `<bin>_matrix.tsv.gz`. They are invariant across the panel, so they carry no association signal — this file is a record of them, not an additional part of the matrix. Note the consequence: with any `--threshold` ≥ 1, the core file and the matrix are wholly disjoint.
+> **The core-k-mers file is an independent, optional output.** With `--write_core_kmers`, k-mers present in *every* accession are written to `<bin>_core.txt.gz`. The flag does nothing else — it never adds to or removes anything from `<bin>_matrix.tsv.gz`. Whether those all-accession k-mers appear in the matrix is decided only by `--threshold`: they are invariant across the panel and carry no association signal, so a two-sided `--threshold` ≥ 1 drops them (together with the rarest k-mers), while the default `--threshold 0` keeps them. Use `--write_core_kmers` to record them regardless of whether the matrix keeps them.
 
 ---
 
@@ -556,8 +556,9 @@ For each bin:
 1. Opens one streaming cursor per accession, seeking straight to that bin's slice inside each pack.
 2. K-way merges the sorted slices through a heap, emitting each distinct k-mer once. Memory is proportional to the number of accessions, not to the number of distinct k-mers.
 3. Outputs a tab-separated matrix: rows = k-mers, columns = accessions.
-4. Applies the two-sided `--threshold` MAF filter on accession occurrence; respects `--count`, `--delimiter`, and `--core` flags.
-5. Runs in parallel, controlled via `--threads` (set by `--matrix_merge_cpus`). The bin's key space is split into contiguous shards (the top bits of the k-mer key, which are its sort prefix) that are merged concurrently and concatenated in order, so the output is byte-identical to a single-threaded run.
+4. Applies the two-sided `--threshold` MAF filter on accession occurrence, and formats each row's values according to `--count` and `--delimiter`.
+5. If `--write_core_kmers` is set, additionally writes the k-mers present in every accession to a separate `<bin>_core.txt` — an independent side output that does not affect the matrix.
+6. Runs in parallel, controlled via `--threads` (set by `--matrix_merge_cpus`). The bin's key space is split into contiguous shards (the top bits of the k-mer key, which are its sort prefix) that are merged concurrently and concatenated in order, so the output is byte-identical to a single-threaded run.
 
 ---
 
