@@ -106,10 +106,12 @@ keeps many cores busy instead of stalling on a single-threaded step.
 ## Stage 2: matrix_merge
 
 Stage 2's memory grows with the number of accessions, not with the genetic
-diversity of the panel. It was measured directly by opening N accession packs and
-merging a single bin:
+diversity of the panel. The merge holds a small read buffer per accession and
+passes k-mers through a heap one at a time, so nothing it holds scales with the
+number of distinct k-mers. It was measured directly by opening N accession packs
+and merging a single bin, with a single merge worker:
 
-| accessions | peak memory |
+| accessions | peak memory (single worker) |
 |---|---|
 | 100 | 11 MB |
 | 1,000 | 79 MB |
@@ -117,13 +119,23 @@ merging a single bin:
 | 12,600 (extrapolated) | about 1.0 GB |
 | 50,000 (extrapolated) | about 3.8 GB |
 
-That is about 76 KB per accession, and the relationship is linear. The merge for
-one bin holds a small read buffer per accession and passes k-mers through a heap
-one at a time, so nothing it holds scales with the number of distinct k-mers. At
-panel sizes in the tens of thousands the binding limit becomes the number of open
-file descriptors, one pack held open per accession, rather than memory, so a
-memory request of a few GB is ample. Each bin's merge takes a few seconds and
-writes one compressed matrix file, with no separate extraction step.
+That is about 76 KB per accession per worker, and the relationship is linear.
+
+Since v3.7.0 the merge runs in parallel: the bin's key space is range-sharded
+into contiguous slices merged concurrently by `matrix_merge_cpus` workers, each
+keeping its own read buffer per accession (halved to about 36 KB in the parallel
+path). Peak memory is therefore roughly `matrix_merge_cpus × accessions × 36 KB`,
+about 7 GB for a 12,600-accession panel at the default 16 workers, which is why
+the default request is 16 GB. Because a shard is the top bits of the k-mer key
+(its sort prefix) and every accession encodes a given k-mer identically, each
+shard is an independent contiguous sub-range of every pack, and concatenating the
+per-shard outputs in shard order reproduces the single-threaded result exactly.
+The parallel merge was about 4.4 times faster than the single-threaded merge at 8
+workers on a 62.7 M-k-mer bin, at byte-identical output.
+
+At panel sizes in the tens of thousands the binding limit becomes the number of
+open file descriptors, one pack held open per accession, rather than memory. Each
+bin's merge writes one compressed matrix file, with no separate extraction step.
 
 ## Performance across releases
 
@@ -218,7 +230,9 @@ seeks straight into the packs and creates none.
 - Stage 1 peak memory is a configuration value and does not grow with input size.
 - Stage 1 writes one pack per accession and creates no intermediate files that are
   later re-read.
-- Stage 2 memory is about 76 KB per accession and is independent of genetic
-  diversity, staying under a few GB even at tens of thousands of accessions.
+- Stage 2 memory is about 36 KB per accession per merge worker and is independent
+  of genetic diversity; at the default 16 workers that is roughly 7 GB for a
+  12,600-accession panel. The merge is range-sharded across workers for a ~4.4x
+  speedup at byte-identical output.
 - The output is deterministic and byte-identical regardless of the Stage 1 memory
   budget.

@@ -10,6 +10,9 @@
 #include <bitset>
 #include <mutex>
 #include <thread>
+#include <atomic>
+#include <cerrno>
+#include <functional>
 #include <string>
 #include <cstring>
 #include <chrono>
@@ -94,6 +97,136 @@ vector<string> get_accessions(const string& accessions_path) {
 }
 
 // ===========================================================================
+// Parallelising the merge by RANGE-SHARDING the key space.
+//
+// The merge below is a k-way streaming merge over N sorted per-accession slices.
+// It parallelises cleanly because the key space can be cut into S contiguous
+// shards that are INDEPENDENT: a shard's rows depend only on that shard's keys,
+// and every accession's occurrence of a given key lands in the SAME shard.
+//
+// Why the same shard, deterministically: a shard is the top B bits of the key
+// (S = 2^B). The first base of a k-mer sits in the key's HIGHEST bits and
+// A<C<G<T maps to 0<1<2<3, so numeric key order == lexicographic k-mer order and
+// the top B bits are the sort prefix. Two things follow:
+//   1. keys sharing a shard form a CONTIGUOUS run in every pack's sorted bin, so
+//      a shard is a byte range [lo,hi) found once per accession by a linear scan;
+//   2. a k-mer encodes to the identical canonical Key at the identical k in every
+//      accession (the footer pins k), so it maps to the identical shard in every
+//      accession. Shard-s therefore sees ALL occurrences of every shard-s k-mer,
+//      so its per-k-mer occurrence count (used by the MAF and core filters) is the
+//      true panel-wide count, and NUM_ACC stays the GLOBAL accession count.
+//
+// Each shard runs an independent merge into its own part file; the parts are
+// concatenated in shard order. Because shard 0 < shard 1 < ... in key order and
+// no key straddles a shard, the concatenation is the same globally-sorted stream
+// the single-threaded merge produced — byte-for-byte. S=1 collapses to exactly
+// the original path. This is a performance change only; output is identical.
+// ===========================================================================
+
+// Top B bits of the 2k-bit key: the sort prefix, hence the shard id. B must be
+// in [1, BITS-1]; B==0 means a single shard (id 0). Shifts are kept in range for
+// both the one-word (k<=32) and two-word (k<=63) key forms.
+static inline uint64_t key_top_bits(const Key& key, int B)
+{
+    if (B <= 0) return 0;
+    const int sh = kmer::BITS - B;            // in [1, BITS-1]
+#if KMER_K * 2 <= 64
+    return key.w0 >> sh;                       // sh in [1,63]: well-defined
+#else
+    if (sh >= 64) return key.w1 >> (sh - 64);  // top bits live entirely in w1
+    return (key.w1 << (64 - sh)) | (key.w0 >> sh);
+#endif
+}
+
+// Run fn(i) for i in [0,n) across up to `threads` workers pulling off a shared
+// counter. The first exception thrown in any worker is rethrown after all join,
+// so a failing shard/accession surfaces as a normal error rather than terminate.
+template <class F>
+static void parallel_for(size_t n, uint threads, F&& fn)
+{
+    if (n == 0) return;
+    uint t = (uint)min<size_t>(threads < 1 ? 1 : threads, n);
+    atomic<size_t> next{0};
+    exception_ptr err;
+    mutex em;
+    auto worker = [&]() {
+        try {
+            size_t i;
+            while ((i = next.fetch_add(1)) < n) fn(i);
+        } catch (...) {
+            lock_guard<mutex> lk(em);
+            if (!err) err = current_exception();
+        }
+    };
+    if (t <= 1) {
+        worker();
+    } else {
+        vector<thread> ths;
+        ths.reserve(t);
+        for (uint k = 0; k < t; k++) ths.emplace_back(worker);
+        for (auto& x : ths) x.join();
+    }
+    if (err) rethrow_exception(err);
+}
+
+// Streams a byte range [start_off, start_off + nrec*RECORD_BYTES) of a sorted bin
+// via pread() on a SHARED read-only fd. pread is positioned — it neither uses nor
+// moves the fd's file offset — so many RangeCursors over the same fd (different
+// shards of the same accession, on different threads) read concurrently and
+// safely. One fd per accession is opened for the whole merge, N total, not N x S.
+class RangeCursor {
+public:
+    // 2048 records = 36 KB/pread: large enough that syscall overhead is
+    // negligible, small enough that the N-per-shard x T-concurrent-shards buffer
+    // footprint stays modest (see the matrix_merge_memory note in nextflow.config).
+    RangeCursor(int fd, uint64_t start_off, size_t nrec, size_t buf_records = 2048)
+        : fd_(fd), next_off_(start_off), remaining_(nrec),
+          buf_cap_(buf_records ? buf_records : 1)
+    {
+        buf_.resize(buf_cap_);
+        refill();
+    }
+
+    bool valid() const { return pos_ < filled_; }
+    const kmer::Record& current() const { return buf_[pos_]; }
+    void advance() { if (++pos_ >= filled_) refill(); }
+
+private:
+    void refill()
+    {
+        pos_ = 0;
+        filled_ = 0;
+        if (!remaining_) return;
+        size_t n    = remaining_ < buf_cap_ ? remaining_ : buf_cap_;
+        size_t want = n * kmer::RECORD_BYTES;
+        char*  dst  = reinterpret_cast<char*>(buf_.data());
+        size_t got  = 0;
+        // pread may return a short count without error; loop until the records
+        // are fully read (or a real error / premature EOF is hit).
+        while (got < want) {
+            ssize_t r = pread(fd_, dst + got, want - got, (off_t)(next_off_ + got));
+            if (r < 0) {
+                if (errno == EINTR) continue;
+                throw runtime_error("RangeCursor: pread failed");
+            }
+            if (r == 0) throw runtime_error("RangeCursor: unexpected EOF in bin slice");
+            got += (size_t)r;
+        }
+        next_off_  += want;
+        filled_     = n;
+        remaining_ -= n;
+    }
+
+    int                 fd_;
+    uint64_t            next_off_;
+    size_t              remaining_;
+    size_t              buf_cap_;
+    vector<kmer::Record> buf_;
+    size_t              pos_    = 0;
+    size_t              filled_ = 0;
+};
+
+// ===========================================================================
 // merge_chunk — build one bin's matrix by k-way merging the accessions'
 // sorted pack slices.
 //
@@ -119,8 +252,6 @@ void merge_chunk(const uint file_index, const uint min_occur, string input_path,
                  string accessions_path, string delimiter, bool show_count,
                  string ouput_dir, bool write_core, bool bit_packed, uint num_threads = 1)
 {
-    (void)num_threads;   // the merge is sequential by nature; see note below
-
     auto accessions = get_accessions(accessions_path);
     size_t NUM_ACC = accessions.size();
 
@@ -155,98 +286,226 @@ void merge_chunk(const uint file_index, const uint min_occur, string input_path,
             throw runtime_error("Pack file does not exist: " + paths[i]);
     }
 
-    ofstream m_stream(ouput_dir + to_string(file_index) + "_matrix.tsv");
-    ofstream ck_stream;
-    if (write_core) ck_stream.open(ouput_dir + to_string(file_index) + "_core.txt");
-
-    // Reusable row. Only the entries actually touched by a k-mer are written
-    // and then cleared, so per-row work is O(accessions carrying the k-mer),
-    // not O(N) — zeroing 25.2 KB per row would dominate everything else.
-    vector<kmer::Count> row(NUM_ACC, 0);
-    vector<unsigned char> packed;
-    vector<uint32_t>    touched;
-    touched.reserve(256);
-
-    auto write_row = [&](const Key& key, size_t occ) {
-        // Core k-mers (present in every accession) are invariant across the
-        // panel and carry no association signal: recorded separately and
-        // dropped from the matrix. The file was originally named _discard.txt.
-        if (write_core && occ == NUM_ACC)
-            ck_stream << bit_decode(key) << "\n";
-        // Two-sided MAF filter: discard both rare and near-ubiquitous k-mers.
-        // min_occur == 0 disables it. Intentional — see commit cafcc67.
-        if (occ < min_occur || occ > NUM_ACC - min_occur) return;
-
-        // Row layout: <kmer> TAB <v0> D <v1> D ... D <vN-1>
-        // The k-mer is always tab-separated from the values so the first column
-        // can be split off even when --delimiter none packs the values
-        // together; `delimiter` separates values from EACH OTHER only.
-        m_stream << bit_decode(key) << "\t";
-        if (bit_packed) {
-            // One bit per accession, LSB-first within each byte, written as
-            // lowercase hex. 12,600 accessions become 1,575 bytes -> 3,150 hex
-            // characters, against 25,200 characters for the tab form: 8x smaller.
-            // Presence/absence only, so there is nothing to lose by packing.
-            packed.assign((NUM_ACC + 7) / 8, 0);
-            for (size_t i = 0; i < NUM_ACC; i++)
-                if (row[i]) packed[i >> 3] |= (unsigned char)(1u << (i & 7));
-            static const char HEX[] = "0123456789abcdef";
-            for (unsigned char b : packed) { m_stream << HEX[b >> 4] << HEX[b & 15]; }
-        } else {
-            for (size_t i = 0; i < NUM_ACC; i++) {
-                kmer::Count freq = row[i];
-                if (!show_count && freq > 0) freq = 1;
-                if (i) m_stream << delimiter;
-                m_stream << freq;
-            }
+    // -- Open one read-only fd per accession and read its bin geometry once ---
+    // The fd stays open for the whole merge and is shared by every shard worker
+    // via pread (positioned, offset-free), so we need N descriptors, not N x S.
+    // PackReader validates magic/version/k and gives the bin's byte offset and
+    // record count without reading the payload.
+    struct Acc { int fd; uint64_t off; size_t nrec; };
+    vector<Acc> acc(NUM_ACC);
+    for (size_t i = 0; i < NUM_ACC; i++) {
+        kmer::PackReader r(paths[i]);
+        acc[i].off  = r.bin_offset(file_index);
+        acc[i].nrec = r.bin_records(file_index);
+        acc[i].fd   = ::open(paths[i].c_str(), O_RDONLY);
+        if (acc[i].fd < 0) {
+            for (size_t j = 0; j < i; j++) ::close(acc[j].fd);
+            throw runtime_error("Cannot open pack file: " + paths[i]);
         }
-        m_stream << "\n";
-    };
+    }
+    auto close_all = [&]() { for (auto& a : acc) if (a.fd >= 0) { ::close(a.fd); a.fd = -1; } };
 
-    // -- Open one cursor per accession -------------------------------------
-    vector<unique_ptr<kmer::BinCursor>> cur;
-    cur.reserve(NUM_ACC);
-    for (size_t i = 0; i < NUM_ACC; i++)
-        cur.push_back(make_unique<kmer::BinCursor>(paths[i], file_index));
+    // -- Decide the shard count S = 2^B --------------------------------------
+    // Over-partition beyond the thread count (~4x) so a dynamic queue can even
+    // out the GC-skew in how many k-mers fall in each key range. S=1 reproduces
+    // the single-threaded path exactly. Tiny bins are not worth splitting.
+    size_t total_records = 0;
+    for (auto& a : acc) total_records += a.nrec;
 
-    // -- Min-heap over the cursors' current keys ---------------------------
-    // Greater-than comparison so priority_queue yields the SMALLEST key.
-    struct HeapItem { Key key; uint32_t idx; };
-    auto worse = [](const HeapItem& a, const HeapItem& b) {
-        if (a.key == b.key) return a.idx > b.idx;
-        return b.key < a.key;
-    };
-    priority_queue<HeapItem, vector<HeapItem>, decltype(worse)> heap(worse);
-
-    for (size_t i = 0; i < NUM_ACC; i++)
-        if (cur[i]->valid()) heap.push({cur[i]->current().key, (uint32_t)i});
-
-    size_t rows = 0;
-    while (!heap.empty())
-    {
-        Key key = heap.top().key;
-        touched.clear();
-
-        // Drain every accession positioned on this key.
-        while (!heap.empty() && heap.top().key == key) {
-            uint32_t i = heap.top().idx;
-            heap.pop();
-            row[i] = cur[i]->current().count;
-            touched.push_back(i);
-            cur[i]->advance();
-            if (cur[i]->valid()) heap.push({cur[i]->current().key, i});
-        }
-
-        write_row(key, touched.size());
-        rows++;
-        for (uint32_t i : touched) row[i] = 0;    // clear only what was set
+    uint S = 1;
+    int  B = 0;
+    const size_t SMALL_BIN = 1u << 16;   // below this, sharding overhead does not pay
+    if (num_threads > 1 && total_records >= SMALL_BIN) {
+        uint target = num_threads * 4;
+        if (target > 128) target = 128;             // cap: bounds part files and B
+        while ((1u << (B + 1)) <= target) B++;      // B = floor(log2(target)), >= 1
+        if (B < 1) B = 1;
+        if (B > kmer::BITS - 1) B = kmer::BITS - 1;
+        S = 1u << B;
     }
 
-    cout << "  merged " << rows << " distinct k-mers across "
-         << NUM_ACC << " accessions" << endl;
+    // -- Find each accession's S+1 shard boundaries (record indices) ----------
+    // A single linear scan of the sorted bin: top_bits(key) is monotonic
+    // non-decreasing, so shard s occupies [bnd[s], bnd[s+1]). bnd[0]=0 and
+    // bnd[S]=nrec always. Done in parallel across accessions; each reads its bin
+    // once (transient, freed immediately), so peak extra memory is one bin per
+    // worker, not the whole panel.
+    vector<vector<size_t>> bnd(NUM_ACC);
+    try {
+        if (S == 1) {
+            for (size_t i = 0; i < NUM_ACC; i++) bnd[i] = {0, acc[i].nrec};
+        } else {
+            parallel_for(NUM_ACC, num_threads, [&](size_t i) {
+                size_t nrec = acc[i].nrec;
+                vector<size_t> b(S + 1, nrec);
+                b[0] = 0;
+                if (nrec) {
+                    vector<kmer::Record> recs(nrec);
+                    // Sequential pread of the whole bin slice for this accession.
+                    char*  dst = reinterpret_cast<char*>(recs.data());
+                    size_t want = nrec * kmer::RECORD_BYTES, got = 0;
+                    while (got < want) {
+                        ssize_t r = pread(acc[i].fd, dst + got, want - got, (off_t)(acc[i].off + got));
+                        if (r < 0) { if (errno == EINTR) continue; throw runtime_error("boundary pread failed on " + paths[i]); }
+                        if (r == 0) throw runtime_error("boundary pread hit EOF on " + paths[i]);
+                        got += (size_t)r;
+                    }
+                    size_t r = 0;
+                    for (uint s = 1; s < S; s++) {
+                        while (r < nrec && key_top_bits(recs[r].key, B) < s) r++;
+                        b[s] = r;
+                    }
+                }
+                bnd[i] = move(b);
+            });
+        }
+    } catch (...) { close_all(); throw; }
 
-    m_stream.close();
-    if (write_core) ck_stream.close();
+    auto part_matrix = [&](uint s) { return ouput_dir + to_string(file_index) + "_matrix.tsv.p" + to_string(s); };
+    auto part_core   = [&](uint s) { return ouput_dir + to_string(file_index) + "_core.txt.p"   + to_string(s); };
+    const string final_matrix = ouput_dir + to_string(file_index) + "_matrix.tsv";
+    const string final_core   = ouput_dir + to_string(file_index) + "_core.txt";
+
+    atomic<size_t> total_rows{0};
+
+    // -- One shard: an independent k-way merge over its key range -------------
+    // Each shard owns its output part and its own row/packed/touched scratch, so
+    // there is no cross-shard shared state. row and the heap idx are indexed by
+    // the GLOBAL accession index i, so counts land in the right column and occ
+    // (compared against the GLOBAL NUM_ACC) is the true panel-wide count.
+    auto merge_shard = [&](uint s) {
+        ofstream m_stream(part_matrix(s));
+        if (!m_stream) throw runtime_error("Cannot create " + part_matrix(s));
+        ofstream ck_stream;
+        if (write_core) {
+            ck_stream.open(part_core(s));
+            if (!ck_stream) throw runtime_error("Cannot create " + part_core(s));
+        }
+
+        vector<kmer::Count>   row(NUM_ACC, 0);
+        vector<unsigned char> packed;
+        vector<uint32_t>      touched;
+        touched.reserve(256);
+
+        auto write_row = [&](const Key& key, size_t occ) {
+            // Core k-mers (present in every accession) are invariant across the
+            // panel and carry no association signal: recorded separately and
+            // dropped from the matrix. The file was originally named _discard.txt.
+            if (write_core && occ == NUM_ACC)
+                ck_stream << bit_decode(key) << "\n";
+            // Two-sided MAF filter: discard both rare and near-ubiquitous k-mers.
+            // min_occur == 0 disables it. Intentional — see commit cafcc67.
+            if (occ < min_occur || occ > NUM_ACC - min_occur) return;
+
+            // Row layout: <kmer> TAB <v0> D <v1> D ... D <vN-1>
+            // The k-mer is always tab-separated from the values so the first column
+            // can be split off even when --delimiter none packs the values
+            // together; `delimiter` separates values from EACH OTHER only.
+            m_stream << bit_decode(key) << "\t";
+            if (bit_packed) {
+                // One bit per accession, LSB-first within each byte, written as
+                // lowercase hex. 12,600 accessions become 1,575 bytes -> 3,150 hex
+                // characters, against 25,200 characters for the tab form: 8x smaller.
+                // Presence/absence only, so there is nothing to lose by packing.
+                packed.assign((NUM_ACC + 7) / 8, 0);
+                for (size_t i = 0; i < NUM_ACC; i++)
+                    if (row[i]) packed[i >> 3] |= (unsigned char)(1u << (i & 7));
+                static const char HEX[] = "0123456789abcdef";
+                for (unsigned char b : packed) { m_stream << HEX[b >> 4] << HEX[b & 15]; }
+            } else {
+                for (size_t i = 0; i < NUM_ACC; i++) {
+                    kmer::Count freq = row[i];
+                    if (!show_count && freq > 0) freq = 1;
+                    if (i) m_stream << delimiter;
+                    m_stream << freq;
+                }
+            }
+            m_stream << "\n";
+        };
+
+        // -- Open one range cursor per accession over this shard's slice -------
+        vector<unique_ptr<RangeCursor>> cur(NUM_ACC);
+        for (size_t i = 0; i < NUM_ACC; i++) {
+            size_t lo = bnd[i][s], hi = bnd[i][s + 1];
+            if (hi > lo)
+                cur[i] = make_unique<RangeCursor>(acc[i].fd, acc[i].off + lo * kmer::RECORD_BYTES, hi - lo);
+        }
+
+        // -- Min-heap over the cursors' current keys ---------------------------
+        // Greater-than comparison so priority_queue yields the SMALLEST key.
+        struct HeapItem { Key key; uint32_t idx; };
+        auto worse = [](const HeapItem& a, const HeapItem& b) {
+            if (a.key == b.key) return a.idx > b.idx;
+            return b.key < a.key;
+        };
+        priority_queue<HeapItem, vector<HeapItem>, decltype(worse)> heap(worse);
+
+        for (size_t i = 0; i < NUM_ACC; i++)
+            if (cur[i] && cur[i]->valid()) heap.push({cur[i]->current().key, (uint32_t)i});
+
+        size_t rows = 0;
+        while (!heap.empty())
+        {
+            Key key = heap.top().key;
+            touched.clear();
+
+            // Drain every accession positioned on this key.
+            while (!heap.empty() && heap.top().key == key) {
+                uint32_t i = heap.top().idx;
+                heap.pop();
+                row[i] = cur[i]->current().count;
+                touched.push_back(i);
+                cur[i]->advance();
+                if (cur[i]->valid()) heap.push({cur[i]->current().key, i});
+            }
+
+            write_row(key, touched.size());
+            rows++;
+            for (uint32_t i : touched) row[i] = 0;    // clear only what was set
+        }
+
+        m_stream.close();
+        if (write_core) ck_stream.close();
+        total_rows.fetch_add(rows);
+    };
+
+    // -- Run the shards on the thread pool, then stitch the parts in order ----
+    // Shards are dispatched off a shared counter (S >= threads), so a thread that
+    // draws a light shard immediately picks up the next one.
+    try {
+        parallel_for(S, num_threads, merge_shard);
+    } catch (...) { close_all(); throw; }
+
+    close_all();
+
+    // Concatenate the per-shard parts in shard order. Shard 0 < shard 1 < ... in
+    // key order and no key straddles a shard, so this is the same globally-sorted
+    // stream the single-threaded merge produced. Streamed (not slurped) because a
+    // bin's matrix can be many GB; parts are removed once folded in.
+    auto stitch = [&](const string& final_path, function<string(uint)> part_of) {
+        ofstream out(final_path, ios::binary | ios::trunc);
+        if (!out) throw runtime_error("Cannot create " + final_path);
+        vector<char> buf(1u << 20);
+        for (uint s = 0; s < S; s++) {
+            ifstream in(part_of(s), ios::binary);
+            if (!in) throw runtime_error("Cannot read part " + part_of(s));
+            while (in) {
+                in.read(buf.data(), (streamsize)buf.size());
+                streamsize n = in.gcount();
+                if (n > 0) out.write(buf.data(), n);
+            }
+            in.close();
+            filesystem::remove(part_of(s));
+        }
+        out.close();
+    };
+    stitch(final_matrix, part_matrix);
+    if (write_core) stitch(final_core, part_core);
+
+    cout << "  merged " << total_rows.load() << " distinct k-mers across "
+         << NUM_ACC << " accessions"
+         << " (" << S << (S == 1 ? " shard" : " shards")
+         << ", " << num_threads << (num_threads == 1 ? " thread)" : " threads)") << endl;
 }
 
 int main(int argc, char *argv[])
@@ -450,7 +709,9 @@ int main(int argc, char *argv[])
 		     << "\t\t--core    <write core k-mers file (_core.txt); type: y|n> (default: n)\n"
 		     << "\t\t            Core = present in ALL accessions; these are excluded from the matrix.\n"
 		     << "\t\t--bins    <number of bins (used in output folder name)> (default: 0)\n"
-		     << "\t\t--threads <parallel threads for accession reading> (default: SLURM_CPUS_PER_TASK if set, else hardware concurrency)\n"
+		     << "\t\t--threads <parallel merge threads> (default: SLURM_CPUS_PER_TASK if set, else hardware concurrency)\n"
+		     << "\t\t            The bin's key space is split into contiguous shards merged in\n"
+		     << "\t\t            parallel; output is byte-identical to a single-threaded run.\n"
 		     << "\n"
 		     << "\tHow --encoding, --delimiter and --count combine:\n"
 		     << "\n"

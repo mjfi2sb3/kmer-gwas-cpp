@@ -348,11 +348,11 @@ for a compressed export.
 | `--encoding` | `text` | Matrix encoding: `text` (delimited) or `bits` (1 bit per accession as hex, ~8× smaller; presence/absence only). See note below |
 | `--delimiter` | `none` | Value separator for the **text** encoding: `tab`, `space` or `none`. `none` concatenates single characters and is presence/absence only |
 | `--core` | `n` | `y` = write core k-mers file per bin. Core k-mers are **excluded from the matrix** (see note below) |
-| `--matrix_merge_cpus` | `32` | Threads for the MATRIX_MERGE stage |
+| `--matrix_merge_cpus` | `16` | Threads for the MATRIX_MERGE stage. The merge runs in parallel (range-sharded, byte-identical output) and these cores also feed pigz; returns diminish past ~8–12 threads |
 | `--kmer_count_memory` | `128.GB` | **Scheduler** memory request per KMER_COUNT job (the SLURM `--mem`, and the cgroup ceiling it enforces). Dot notation: `120.GB`, `256.GB`. For a whole node use `--clusterOptions='--mem=0'`. This is a *scheduling* knob — the accumulation budget is auto-sized from it, see `--kmer_count_budget_gb` |
 | `--kmer_count_budget_gb` | `0` (auto) | Stage 1 accumulation budget, in GB. **`0` = auto**: captured at run time from the RAM actually enforced on the job — the cgroup limit, else SLURM env, else `MemTotal` — and set to **70%** of it (the rest is headroom for read batches and worker maps). So it tracks the real node — a shared allocation, an `--mem=0` exclusive node, or a workstation — with no guessing. A positive value forces that budget, still capped at the detected limit so it can't exceed what the cgroup would OOM-kill |
 | `--kmer_count_read_threads` | `2` | Decompress the two mates concurrently (one thread per file). Inflate is the read-phase bottleneck on many-core nodes, so `2` roughly halves it on NVMe / parallel filesystems. Set `1` to serialise on a single spinning disk, where concurrent reads seek-thrash |
-| `--matrix_merge_memory` | `128.GB` | RAM per MATRIX_MERGE job. Use dot notation: `16.GB`, `64.GB`, `128.GB`. The merge needs little (~1–2 GB even at tens of thousands of accessions); the default is generous headroom |
+| `--matrix_merge_memory` | `16.GB` | RAM per MATRIX_MERGE job. Use dot notation: `16.GB`, `64.GB`, `128.GB`. Memory is `O(matrix_merge_cpus × accessions)` (a small read buffer per accession in each concurrent shard worker) and independent of genome size — about 7 GB for a 12,600-accession panel at the default 16 CPUs, so 16 GB has headroom |
 | `--kmer_count_time` | `5h` | Wallclock time limit per KMER_COUNT job. Examples: `'2h'`, `'5h'`, `'1d'`, `'2h 30m'` |
 | `--matrix_merge_time` | `10h` | Wallclock time limit per MATRIX_MERGE job. Examples: `'5h'`, `'10h'`, `'1d'`, `'2h 30m'` |
 | `--cleanup` | `true` | Delete Nextflow work directory on successful completion. Pass `--cleanup false` to preserve work dirs for debugging or `-resume` |
@@ -462,7 +462,7 @@ nextflow run main.nf \
 | Stage | CPUs | Memory | Time |
 |-------|------|--------|------|
 | KMER_COUNT | 32 (fixed) | 128.GB (`--kmer_count_memory`) | 5h (`--kmer_count_time`) |
-| MATRIX_MERGE | 32 (`--matrix_merge_cpus`) | 128.GB (`--matrix_merge_memory`) | 10h (`--matrix_merge_time`) |
+| MATRIX_MERGE | 16 (`--matrix_merge_cpus`) | 16.GB (`--matrix_merge_memory`) | 10h (`--matrix_merge_time`) |
 
 The container image is pulled automatically on first run and cached in `.singularity/` under the launch directory. Override the cache location with `--singularity_cache_dir /path/to/cache` (useful for sharing the cache across multiple runs).
 
@@ -557,7 +557,7 @@ For each bin:
 2. K-way merges the sorted slices through a heap, emitting each distinct k-mer once. Memory is proportional to the number of accessions, not to the number of distinct k-mers.
 3. Outputs a tab-separated matrix: rows = k-mers, columns = accessions.
 4. Applies the two-sided `--threshold` MAF filter on accession occurrence; respects `--count`, `--delimiter`, and `--core` flags.
-5. Multi-threaded, controlled via `--threads` (set by `--matrix_merge_cpus`).
+5. Runs in parallel, controlled via `--threads` (set by `--matrix_merge_cpus`). The bin's key space is split into contiguous shards (the top bits of the k-mer key, which are its sort prefix) that are merged concurrently and concatenated in order, so the output is byte-identical to a single-threaded run.
 
 ---
 

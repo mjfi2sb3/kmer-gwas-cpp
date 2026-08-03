@@ -55,8 +55,9 @@ def helpMessage() {
 
       Stage 2 resources (MATRIX_MERGE, one job per bin)
         --matrix_merge_cpus      CPUs requested per MATRIX_MERGE job                 [default: ${params.matrix_merge_cpus}]
-                                 The merge is single-threaded; these cores compress
-                                 the bin's output matrix with pigz (saturates ~8).
+                                 The merge runs in parallel (byte-identical output)
+                                 and these cores also feed pigz; returns diminish
+                                 past ~8-12. Higher mainly costs RAM.
         --matrix_merge_memory    RAM requested per MATRIX_MERGE job                 [default: ${params.matrix_merge_memory}]
                                  Use dot notation: 64.MB, 120.GB, 256.GB
                                  (NOT '120 GB'; the space form fails on the CLI).

@@ -4,6 +4,33 @@ All notable changes to this pipeline are documented here.
 Versions follow [semantic versioning](https://semver.org): the major number is
 bumped when output or interfaces change in a backwards-incompatible way.
 
+## v3.7.0
+
+Parallelises the Stage 2 merge. Output is byte-identical to previous releases.
+
+### Changed
+
+- **The Stage 2 matrix merge now runs in parallel.** Previously the k-way merge
+  was single-threaded and the requested CPUs only fed pigz. It now range-shards
+  the bin's key space into `S = 2^B` contiguous slices and merges them
+  concurrently. The shard is the top bits of the k-mer key; because the first
+  base sits in the key's highest bits and A<C<G<T maps to 0<1<2<3, those bits are
+  the sort prefix, so every accession's copy of a k-mer lands in the same shard
+  and each shard is an independent, contiguous sub-range of every sorted pack.
+  The per-shard outputs are concatenated in shard order, so the result is
+  **byte-identical** to a single-threaded run (verified by md5 across encodings,
+  the MAF and core filters, and both single-threaded and parallel paths on real
+  data). Measured ~4.4× faster at 8 threads on a 62.7 M-k-mer bin.
+- **`--matrix_merge_cpus` default 6 → 16.** The CPUs now accelerate the merge
+  itself, not only pigz. Returns diminish past ~8–12 threads (pigz also saturates
+  around 8), so 16 is a sensible ceiling; higher mainly costs RAM.
+- **`--matrix_merge_memory` note updated.** Merge memory is now
+  `O(matrix_merge_cpus × accessions)` — each concurrent shard worker keeps a small
+  (~36 KB) read buffer per accession — but stays independent of genome size. At
+  the default 16 CPUs this is ~7 GB for a 12,600-accession panel, so the 16 GB
+  default is unchanged and still has headroom (a shortfall is caught by the retry
+  escalation from v3.6.0).
+
 ## v3.6.0
 
 Adds failure-recovery for large runs, right-sizes the Stage 2 job, and tidies the
