@@ -4,6 +4,42 @@ All notable changes to this pipeline are documented here.
 Versions follow [semantic versioning](https://semver.org): the major number is
 bumped when output or interfaces change in a backwards-incompatible way.
 
+## v3.7.1
+
+Fixes a container bind for symlinked reads, enriches the launch banner, and tidies
+code comments for publication. No output or interface changes.
+
+### Fixed
+
+- **Symlinked reads whose target sits under a symlinked prefix (e.g. `/project`
+  itself a symlink to `/lustre2/project`) now resolve inside the container.** The
+  `slurm_container` profile bound each `data_dir` symlink's target directory only
+  in its fully-resolved (canonical) form, e.g. `/lustre2/project/.../data`. Inside
+  the container the symlink is followed via the path it literally stores,
+  `/project/.../data`, whose prefix is absent there, so it dangled and Stage 1
+  failed with "no R1 file found" even though the file existed. The profile now
+  binds the target directory in **both** forms — canonical and as the symlink
+  stores it — so the read resolves whichever prefix the link references.
+  (Workaround on older versions: repoint the data symlinks at their canonical
+  target with `ln -sfn "$(readlink -f "$f")" "$f"`.)
+
+### Changed
+
+- **`matrix_merge` logs its merge plan before merging.** It prints the shard and
+  thread count, or the reason it ran single-threaded (`--threads 1`, or an input
+  below the sharding threshold), so the effective Stage 2 parallelism is visible
+  in the task log up front rather than only inferable from the end summary.
+- **The launch banner now reports what a run is actually configured to do.** It
+  adds the pipeline version, the active profile, and the work directory (runtime
+  facts, not parameters), plus previously-omitted parameters `publish_mode`,
+  `kmer_count_budget_gb` (shown as `0 (auto)`), `kmer_count_read_threads`,
+  `queue_size`, and the robustness ceilings (`max_retries`,
+  `max_memory`/`max_cpus`/`max_time`). Fields are regrouped to mirror `--help`.
+- **Code comments genericised for public release.** Removed internal breadcrumbs
+  (audit task numbers, a commit hash, a renamed-file note) and the project's
+  specific accession count, restating costs as the per-accession rate they
+  describe. Comment-only; no behaviour change.
+
 ## v3.7.0
 
 Parallelises the Stage 2 merge. Output is byte-identical to previous releases.

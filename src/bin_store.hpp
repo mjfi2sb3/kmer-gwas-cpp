@@ -145,7 +145,7 @@ public:
         // is a legitimate k-mer (poly-A: A encodes as 00), and filtering it out
         // was silently discarding it. Invalid windows are now skipped at
         // counting time rather than being funnelled into the zero key, so
-        // nothing spurious reaches this point. See task #6.
+        // nothing spurious reaches this point.
         size_t w = 0;
         for (size_t i = 0; i < b.buf.size(); i++)
             if (b.buf[i].count >= min_count)

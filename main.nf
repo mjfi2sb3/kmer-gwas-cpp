@@ -106,38 +106,64 @@ if (params.help) {
 // ---------------------------------------------------------------------------
 def paramSummary(String accessions_file, String data_dir) {
     def c_reset  = "\033[0m"
-    def c_banner = "\033[1;36m"   // bold cyan  — banner & dividers
+    def c_banner = "\033[1;36m"   // bold cyan   — banner & dividers
     def c_head   = "\033[1;33m"   // bold yellow — section headers
     def c_val    = "\033[0;32m"   // green       — values
 
-    log.info """
-    ${c_banner}=========================================${c_reset}
-    ${c_banner} k m e r - G W A S  p i p e l i n e${c_reset}
-    ${c_banner}=========================================${c_reset}
-    ${c_head}Input${c_reset}
-      accessions_file        : ${c_val}${accessions_file}${c_reset}
-      data_dir               : ${c_val}${data_dir}${c_reset}
-    ${c_head}Pipeline${c_reset}
-      kmer_size              : ${c_val}${params.kmer_size}${c_reset}
-      num_bins               : ${c_val}${params.num_bins}${c_reset}
-      min_kmer_count         : ${c_val}${params.min_kmer_count}${c_reset}
-      threshold              : ${c_val}${params.threshold}${c_reset}
-      count                  : ${c_val}${params.count}${c_reset}
-      delimiter              : ${c_val}${params.delimiter}${c_reset}
-      encoding               : ${c_val}${params.encoding}${c_reset}
-      core                   : ${c_val}${params.core}${c_reset}
-      matrix_merge_cpus      : ${c_val}${params.matrix_merge_cpus}${c_reset}
-      kmer_count_memory      : ${c_val}${params.kmer_count_memory.toGiga()}.GB${c_reset}
-      matrix_merge_memory    : ${c_val}${params.matrix_merge_memory.toGiga()}.GB${c_reset}
-      kmer_count_time        : ${c_val}${params.kmer_count_time}${c_reset}
-      matrix_merge_time      : ${c_val}${params.matrix_merge_time}${c_reset}
-      clusterOptions         : ${c_val}${params.clusterOptions ?: '(none)'}${c_reset}
-      singularity_cache_dir  : ${c_val}${params.singularity_cache_dir}${c_reset}
-      cleanup                : ${c_val}${params.cleanup}${c_reset}
-    ${c_head}Output${c_reset}
-      output_dir             : ${c_val}${params.output_dir}${c_reset}
-    ${c_banner}-----------------------------------------${c_reset}
-    """.stripIndent()
+    // Fixed-width label column (fits the longest key, kmer_count_read_threads),
+    // so the colons line up without hand-counting spaces per line.
+    def W    = 24
+    def row  = { k, v -> "      ${k.padRight(W)}: ${c_val}${v}${c_reset}" }
+    def head = { t     -> "    ${c_head}${t}${c_reset}" }
+    def rule = "    ${c_banner}=========================================${c_reset}"
+    def budget = params.kmer_count_budget_gb == 0 ? '0 (auto)' : "${params.kmer_count_budget_gb} GB"
+
+    // Grouped to mirror the --help sections. workflow.* are runtime facts (the
+    // actual version/profile/work dir) that params alone cannot show.
+    def lines = [
+        "",
+        rule,
+        "    ${c_banner} k m e r - G W A S  p i p e l i n e${c_reset}",
+        rule,
+        head('Run'),
+        row('version',  workflow.manifest.version),
+        row('profile',  workflow.profile),
+        row('work_dir', workflow.workDir),
+        head('Input / output'),
+        row('accessions_file', accessions_file),
+        row('data_dir',        data_dir),
+        row('output_dir',      params.output_dir),
+        head('k-mers and matrix content'),
+        row('kmer_size',      params.kmer_size),
+        row('num_bins',       params.num_bins),
+        row('min_kmer_count', params.min_kmer_count),
+        row('threshold',      params.threshold),
+        row('count',          params.count),
+        row('delimiter',      params.delimiter),
+        row('encoding',       params.encoding),
+        row('core',           params.core),
+        head('Stage 1 resources (KMER_COUNT)'),
+        row('kmer_count_memory',       "${params.kmer_count_memory.toGiga()}.GB"),
+        row('kmer_count_budget_gb',    budget),
+        row('kmer_count_read_threads', params.kmer_count_read_threads),
+        row('kmer_count_time',         params.kmer_count_time),
+        head('Stage 2 resources (MATRIX_MERGE)'),
+        row('matrix_merge_cpus',   params.matrix_merge_cpus),
+        row('matrix_merge_memory', "${params.matrix_merge_memory.toGiga()}.GB"),
+        row('matrix_merge_time',   params.matrix_merge_time),
+        head('Scheduler and execution'),
+        row('clusterOptions',        params.clusterOptions ?: '(none)'),
+        row('queue_size',            params.queue_size),
+        row('max_retries',           params.max_retries),
+        row('max_memory/cpus/time',  "${params.max_memory} / ${params.max_cpus} / ${params.max_time}"),
+        row('singularity_cache_dir', params.singularity_cache_dir),
+        head('Work directory and publishing'),
+        row('publish_mode', params.publish_mode),
+        row('cleanup',      params.cleanup),
+        "    ${c_banner}-----------------------------------------${c_reset}",
+        ""
+    ]
+    log.info lines.join('\n')
 }
 
 // ---------------------------------------------------------------------------

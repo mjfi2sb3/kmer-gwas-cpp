@@ -227,26 +227,28 @@ private:
 };
 
 // ===========================================================================
-// merge_chunk — build one bin's matrix by k-way merging the accessions'
-// sorted pack slices.
+// merge_chunk — build one bin's matrix by k-way merging the accessions' sorted
+// pack slices, sharded across threads (see the range-sharding note above).
 //
 // MEMORY: O(number of accessions), NOT O(union k-mers x accessions).
 //
-// The previous implementation loaded the whole bin into
-// `unordered_map<Key, vector<Count>>`, so it needed union_rows x (N+1) x 2
-// bytes — 25.2 KB per distinct k-mer at 12,600 accessions, i.e. 8 GB per bin
-// task at a 0.5 B union and 82 GB at 5 B. That is why num_bins had to grow with
-// genome size, and num_bins is what drove the inode count.
+// An earlier implementation loaded the whole bin into
+// `unordered_map<Key, vector<Count>>`, needing union_rows x (N+1) x 2 bytes:
+// two bytes of count per accession for every distinct k-mer in the bin. At tens
+// of thousands of accessions a single bin's union is gigabytes, which is why
+// num_bins used to grow with genome size, and num_bins is still what drives the
+// inode count.
 //
-// Because Stage 1 now emits each bin slice SORTED, the same result can be
-// produced by advancing one cursor per accession through a heap: pop the
-// smallest key, gather the counts from every accession holding it, emit the
-// row. Resident memory is one small buffer per accession (N x 4096 records)
-// plus a single reusable row.
+// Because Stage 1 emits each bin slice SORTED, the same result comes from a
+// streaming k-way merge: advance one cursor per accession through a heap, pop
+// the smallest key, gather the counts from every accession holding it, emit the
+// row. The only resident state is a read buffer per accession (in each active
+// shard worker) plus one reusable row per worker; nothing scales with the k-mer
+// union.
 //
-// Note the row itself is inherently O(N) to WRITE — a dense matrix row is
-// 25.2 KB at 12,600 accessions regardless of how it was computed. That is the
-// output format's cost, addressed separately in task #15.
+// The dense row is still inherently O(N) to WRITE: two bytes per accession, so
+// tens of KB per k-mer at large panels, however it was computed. That is the
+// output format's cost, not the merge's.
 // ===========================================================================
 void merge_chunk(const uint file_index, const uint min_occur, string input_path,
                  string accessions_path, string delimiter, bool show_count,
@@ -324,6 +326,20 @@ void merge_chunk(const uint file_index, const uint min_occur, string input_path,
         S = 1u << B;
     }
 
+    // Report the plan before the (potentially long) merge, so the effective
+    // parallelism — and the reason when it collapses to single-threaded — is
+    // visible in the task log up front, not only inferable from the end summary.
+    // Only min(num_threads, S) workers are ever dispatched.
+    uint eff_threads = (uint)min<size_t>(num_threads, S);
+    if (S > 1) {
+        cout << "  merge plan: " << S << " shards over " << eff_threads << " threads" << endl;
+    } else if (num_threads <= 1) {
+        cout << "  merge plan: 1 shard, single-threaded (--threads 1)" << endl;
+    } else {
+        cout << "  merge plan: 1 shard, single-threaded (input below sharding threshold, "
+             << total_records << " records)" << endl;
+    }
+
     // -- Find each accession's S+1 shard boundaries (record indices) ----------
     // A single linear scan of the sorted bin: top_bits(key) is monotonic
     // non-decreasing, so shard s occupies [bnd[s], bnd[s+1]). bnd[0]=0 and
@@ -389,12 +405,12 @@ void merge_chunk(const uint file_index, const uint min_occur, string input_path,
 
         auto write_row = [&](const Key& key, size_t occ) {
             // Core k-mers (present in every accession) are invariant across the
-            // panel and carry no association signal: recorded separately and
-            // dropped from the matrix. The file was originally named _discard.txt.
+            // panel and carry no association signal, so they are recorded
+            // separately and excluded from the matrix.
             if (write_core && occ == NUM_ACC)
                 ck_stream << bit_decode(key) << "\n";
-            // Two-sided MAF filter: discard both rare and near-ubiquitous k-mers.
-            // min_occur == 0 disables it. Intentional — see commit cafcc67.
+            // Two-sided MAF filter: discard both rare and near-ubiquitous k-mers
+            // (both carry little association signal). min_occur == 0 disables it.
             if (occ < min_occur || occ > NUM_ACC - min_occur) return;
 
             // Row layout: <kmer> TAB <v0> D <v1> D ... D <vN-1>
@@ -404,9 +420,10 @@ void merge_chunk(const uint file_index, const uint min_occur, string input_path,
             m_stream << bit_decode(key) << "\t";
             if (bit_packed) {
                 // One bit per accession, LSB-first within each byte, written as
-                // lowercase hex. 12,600 accessions become 1,575 bytes -> 3,150 hex
-                // characters, against 25,200 characters for the tab form: 8x smaller.
-                // Presence/absence only, so there is nothing to lose by packing.
+                // lowercase hex: N accessions pack into ceil(N/8) bytes, i.e. about
+                // N/4 hex characters, against roughly 2N characters for the delimited
+                // text form — about 8x smaller. Presence/absence only, so there is
+                // nothing to lose by packing.
                 packed.assign((NUM_ACC + 7) / 8, 0);
                 for (size_t i = 0; i < NUM_ACC; i++)
                     if (row[i]) packed[i >> 3] |= (unsigned char)(1u << (i & 7));
@@ -683,7 +700,7 @@ int main(int argc, char *argv[])
 
     // Check if all required options are provided.
     // --index must be included: it was previously read from an uninitialised
-    // variable when omitted, silently merging an arbitrary bin (task #10).
+    // variable when omitted, silently merging an arbitrary bin.
     if (input_path.empty() || accessions_path.empty() || !have_index)
     /*{
         cout << "usage: " << argv[0] << " --input <input path> --accessions <accessions path> --index <file index> --threshold <min occurence threshold>\n";

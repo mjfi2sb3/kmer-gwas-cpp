@@ -243,7 +243,7 @@ private:
 
    // FASTA: a header line starting with '>' followed by one or more sequence
    // lines, which must be concatenated. Previously this format was detected and
-   // then parsed with the FASTQ rule, silently yielding garbage (task #7).
+   // then parsed with the FASTQ rule, silently yielding garbage.
    bool next_fasta(vector<string> &out, size_t max_reads)
    {
       string line;
@@ -318,7 +318,7 @@ private:
 //
 // The batch is MOVED in, not copied. It previously took `vector<string>&` but
 // stored a by-value member, silently duplicating every read once per in-flight
-// task — one of the three copies removed in task #4.
+// task — one of three redundant copies since removed.
 // ---------------------------------------------------------------------------
 class kmers_obj
 {
@@ -494,7 +494,7 @@ int main(int argc, char *argv[])
       const string spill_path = output_path + accession + ".spill";
 
       // Bounded-memory accumulator. Replaces the 1 + B dirs + 2B files scheme
-      // and the separate dedup pass entirely (task #17).
+      // and the separate dedup pass entirely.
       kmer::BinStore store(NUM_FILES, (size_t)(budget_gb * 1e9), spill_path);
 
       thread_pool pool;

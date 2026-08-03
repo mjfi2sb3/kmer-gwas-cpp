@@ -62,12 +62,12 @@ static constexpr bool SINGLE_WORD = (BITS <= 64);
 // behaviour silently wrapped, so a k-mer occurring 65,536 times was recorded as
 // occurring 0 times and then dropped entirely by the singleton filter.
 //
-// Saturating rather than widening is deliberate (task #9): counts that high come
+// Saturating rather than widening is deliberate: counts that high come
 // from repeats, organellar sequence or contamination, where an exact figure
 // carries no association signal. Widening would cost +11% on all Stage 1 output
-// and would double the matrix row from 25.2 KB to 50.4 KB per k-mer at 12,600
-// accessions. If exact high counts are ever needed, widen Count here and the
-// record layout follows.
+// and would double the matrix row's per-accession width (two bytes to four).
+// If exact high counts are ever needed, widen Count here and the record layout
+// follows.
 // ---------------------------------------------------------------------------
 using Count = uint16_t;
 static constexpr Count COUNT_MAX = 65535;
@@ -172,7 +172,7 @@ inline const uint8_t* base_table() {
 
 // Encode a single k-mer, canonicalised. Returns false if it contains any
 // non-ACGT base; callers map that to Key{} to reproduce the legacy behaviour of
-// canonical()+bit_encode() (see task #6).
+// canonical()+bit_encode().
 inline bool encode_canonical(const char* s, size_t len, Key& out) {
     if (len != (size_t)K) return false;
     const uint8_t* T = base_table();
