@@ -11,20 +11,17 @@
 //     --encode             text -> bits   (pack; a matrix "compressor")
 //
 // A C++ companion to tools/bits_to_text.py, for large matrices where the
-// per-line overhead of Python matters; same interface and byte-identical
-// output. Input/output may be plain or gzip-compressed transparently (zlib);
-// both default to stdin/stdout, and an output name ending in .gz is written
-// gzip-compressed.
+// per-line overhead of Python matters; same interface and byte-identical output.
 //
-//   # decode (bits -> text)
-//   bits_to_text -a accessions.txt bin0_bits.tsv.gz bin0_text.tsv.gz
-//   # encode (text -> bits)
-//   bits_to_text --encode -a accessions.txt bin0_text.tsv.gz bin0_bits.tsv.gz
+// Input is read transparently whether plain or gzip-compressed. Output is plain
+// by default; --gzip (or a ".gz" output name) gzips it, but that gzip is
+// single-threaded, so for large matrices "plain | pigz" is faster. Both default
+// to stdin/stdout.
 //
-// The accession count is required (via the accessions file, or -n): when
-// decoding it trims padding bits; when encoding it validates the row width.
-// --delimiter is the separator of the TEXT side in both directions (how the
-// values are written when decoding, and how they are read when encoding).
+//   # decode (bits -> text): N is required to trim the byte padding
+//   bits_to_text --decode -a accessions.txt -i bin0_bits.tsv.gz -o bin0_text.tsv
+//   # encode (text -> bits): N and the delimiter are inferred from the row
+//   bits_to_text --encode -i bin0_text.tsv -o bin0_bits.tsv
 
 #include <zlib.h>
 #include <cstdio>
@@ -41,17 +38,28 @@ static void die(const string& msg) { fprintf(stderr, "bits_to_text: %s\n", msg.c
 
 static void usage(const char* prog) {
     fprintf(stderr,
-        "usage: %s [--decode|--encode] (-a <accessions> | -n <N>)\n"
-        "          [--delimiter tab|space|none] [--header] [infile] [outfile]\n"
+        "usage: %s [--decode|--encode] [-i in] [-o out] [options]\n"
         "\n"
         "  Convert a presence/absence matrix between bit-packed and text forms.\n"
-        "  --decode        bits -> text (default): <kmer><TAB><hex> -> <kmer><TAB><vals>\n"
-        "  --encode        text -> bits: <kmer><TAB><vals> -> <kmer><TAB><hex>\n"
-        "  -a <file>       accessions file; non-blank lines give N and column order\n"
-        "  -n <N>          accession count, if the accessions file is unavailable\n"
-        "  --delimiter     separator of the TEXT side: tab (default) | space | none\n"
-        "  --header        (decode only) prefix an accession-name header row; needs -a\n"
-        "  infile/outfile  default stdin/stdout; .gz is handled transparently\n", prog);
+        "  Input may be plain or gzip (auto-detected). Output is plain by default.\n"
+        "\n"
+        "  Common:\n"
+        "    -i <file>       input  (default: stdin; plain or gzip, auto-detected)\n"
+        "    -o <file>       output (default: stdout)\n"
+        "    --gzip, -z      gzip the output (also implied by a .gz output name).\n"
+        "                    Single-threaded; for big files, prefer plain | pigz.\n"
+        "    --delimiter     text-side value separator: tab | space | none\n"
+        "                    (default: none; on --encode it is auto-detected per row)\n"
+        "\n"
+        "  --decode  bits -> text (default): <kmer><TAB><hex> -> <kmer><TAB><vals>\n"
+        "    -a <file>       accessions file; its non-blank line count gives N\n"
+        "    -n <N>          accession count, if the accessions file is unavailable\n"
+        "                    (N is REQUIRED for --decode: it trims the byte padding)\n"
+        "\n"
+        "  --encode  text -> bits: <kmer><TAB><vals> -> <kmer><TAB><hex>\n"
+        "                    N is inferred from the row width; -a/-n are optional and,\n"
+        "                    if given, validate every row against that count.\n",
+        prog);
 }
 
 // Read one line (without the trailing newline) from a gzFile, any length.
@@ -66,10 +74,11 @@ static bool gz_getline(gzFile f, string& line) {
 }
 
 int main(int argc, char** argv) {
-    string accessions_path, infile, outfile, delim = "\t";
+    string accessions_path, infile, outfile, delim = "";   // default delimiter: none
     long n_acc = -1;
-    bool header = false;
-    bool encode = false;             // default: decode (bits -> text)
+    bool encode = false;        // default: decode (bits -> text)
+    bool gzip   = false;        // default: plain (gzip here is single-threaded; see --gzip)
+    bool delim_set = false;     // did the user pass --delimiter explicitly?
 
     vector<string> pos;
     for (int i = 1; i < argc; i++) {
@@ -80,6 +89,9 @@ int main(int argc, char** argv) {
         };
         if      (a == "--decode") encode = false;
         else if (a == "--encode") encode = true;
+        else if (a == "-i" || a == "--input")  infile  = need("-i");
+        else if (a == "-o" || a == "--output") outfile = need("-o");
+        else if (a == "--gzip" || a == "-z") gzip = true;
         else if (a == "-a" || a == "--accessions") accessions_path = need("-a");
         else if (a == "-n" || a == "--num-accessions") n_acc = atol(need("-n").c_str());
         else if (a == "--delimiter") {
@@ -88,61 +100,59 @@ int main(int argc, char** argv) {
             else if (d == "space") delim = " ";
             else if (d == "none")  delim = "";
             else die("--delimiter must be tab, space or none");
+            delim_set = true;
         }
-        else if (a == "--header") header = true;
         else if (a == "-h" || a == "--help") { usage(argv[0]); return 0; }
         else if (!a.empty() && a[0] == '-' && a != "-") die("unknown option: " + a);
         else pos.push_back(a);
     }
-    if (pos.size() > 0) infile  = pos[0];
-    if (pos.size() > 1) outfile = pos[1];
-    if (pos.size() > 2) die("too many positional arguments");
-    if (header && encode) die("--header applies to --decode only");
-    // "-" is the usual convention for stdin/stdout; treat it as such.
+    // Positional args fill in any -i/-o not given (back-compat: in [out]).
+    size_t p = 0;
+    if (infile.empty()  && p < pos.size()) infile  = pos[p++];
+    if (outfile.empty() && p < pos.size()) outfile = pos[p++];
+    if (p < pos.size()) die("too many positional arguments");
     if (infile == "-")  infile.clear();
     if (outfile == "-") outfile.clear();
 
-    // Resolve the accession count (and names, if a file was given).
-    vector<string> names;
+    // Resolve the accession count. Required for --decode; optional for --encode.
     if (!accessions_path.empty()) {
         ifstream f(accessions_path);
         if (!f) die("cannot open accessions file: " + accessions_path);
-        string line;
+        string line; long cnt = 0;
         while (getline(f, line)) {
-            size_t b = line.find_first_not_of(" \t\r\n");
-            if (b == string::npos) continue;
-            size_t e = line.find_last_not_of(" \t\r\n");
-            names.push_back(line.substr(b, e - b + 1));
+            if (line.find_first_not_of(" \t\r\n") != string::npos) cnt++;
         }
-        n_acc = (long)names.size();
+        n_acc = cnt;
     }
-    if (n_acc <= 0) { usage(argv[0]); die("accession count is required and must be positive (use -a or -n)"); }
-    if (header && names.empty()) die("--header requires -a (to know the accession names)");
-    const size_t N = (size_t)n_acc;
-    const size_t n_bytes = (N + 7) / 8;
+    if (!encode && n_acc <= 0) {
+        usage(argv[0]);
+        die("--decode requires the accession count (use -a or -n) to trim byte padding");
+    }
 
     gzFile in = infile.empty() ? gzdopen(dup(STDIN_FILENO), "rb")
                                : gzopen(infile.c_str(), "rb");
     if (!in) die("cannot open input" + (infile.empty() ? "" : ": " + infile));
 
-    bool out_gz = outfile.size() > 3 && outfile.compare(outfile.size() - 3, 3, ".gz") == 0;
+    // Output: plain by default; --gzip forces it, and a ".gz" output name implies it.
+    if (!outfile.empty() && outfile.size() >= 3 && outfile.compare(outfile.size() - 3, 3, ".gz") == 0)
+        gzip = true;
     gzFile gout = nullptr; FILE* fout = nullptr;
-    if (out_gz) { gout = gzopen(outfile.c_str(), "wb"); if (!gout) die("cannot open output: " + outfile); }
-    else        { fout = outfile.empty() ? stdout : fopen(outfile.c_str(), "wb"); if (!fout) die("cannot open output: " + outfile); }
-
-    auto put = [&](const string& s) {
-        if (out_gz) { if (!s.empty() && gzwrite(gout, s.data(), (unsigned)s.size()) == 0) die("write failed"); }
-        else        { if (fwrite(s.data(), 1, s.size(), fout) != s.size()) die("write failed"); }
-    };
-
-    string obuf; obuf.reserve(64 * 1024);
-
-    if (header && !encode) {
-        obuf = "kmer\t";
-        for (size_t i = 0; i < names.size(); i++) { if (i) obuf += delim; obuf += names[i]; }
-        obuf += '\n';
-        put(obuf);
+    if (gzip) {
+        if (outfile.empty()) gout = gzdopen(dup(STDOUT_FILENO), "wb");
+        else {
+            if (outfile.size() < 3 || outfile.compare(outfile.size() - 3, 3, ".gz") != 0)
+                outfile += ".gz";
+            gout = gzopen(outfile.c_str(), "wb");
+        }
+        if (!gout) die("cannot open output" + (outfile.empty() ? "" : ": " + outfile));
+    } else {
+        fout = outfile.empty() ? stdout : fopen(outfile.c_str(), "wb");
+        if (!fout) die("cannot open output: " + outfile);
     }
+    auto put = [&](const string& s) {
+        if (gzip) { if (!s.empty() && gzwrite(gout, s.data(), (unsigned)s.size()) == 0) die("write failed"); }
+        else      { if (fwrite(s.data(), 1, s.size(), fout) != s.size()) die("write failed"); }
+    };
 
     // hex-nibble lookup for decoding
     unsigned char hexval[256];
@@ -152,7 +162,11 @@ int main(int argc, char** argv) {
     for (int c = 'A'; c <= 'F'; c++) hexval[c] = 10 + c - 'A';
     static const char HEX[] = "0123456789abcdef";
 
+    size_t N       = n_acc > 0 ? (size_t)n_acc : 0;   // 0 = infer (encode only)
+    size_t n_bytes = N ? (N + 7) / 8 : 0;
     vector<unsigned char> bytes(n_bytes);
+
+    string obuf; obuf.reserve(64 * 1024);
     string line;
     size_t lineno = 0;
 
@@ -192,13 +206,21 @@ int main(int argc, char** argv) {
             }
         } else {
             // ---- encode: 0/1 values -> hex -------------------------------
+            // On the first row, auto-detect the delimiter (unless given) from the
+            // values, and infer N from the row width (unless -a/-n fixed it).
+            if (!delim_set && lineno == 1) {
+                if      (memchr(vals, '\t', vlen)) delim = "\t";
+                else if (memchr(vals, ' ',  vlen)) delim = " ";
+                else                               delim = "";
+            }
             // A value is "present" unless it is exactly "0"; this collapses a
-            // count matrix to presence/absence too. Values are read according
-            // to --delimiter (single chars for 'none', delimited fields else).
-            for (size_t b = 0; b < n_bytes; b++) bytes[b] = 0;
+            // count matrix to presence/absence too.
+            size_t upper = vlen + 1;                 // >= number of values in this row
+            if (bytes.size() < (upper + 7) / 8) bytes.assign((upper + 7) / 8, 0);
+            else memset(bytes.data(), 0, bytes.size());
             size_t count = 0;
             auto set_bit = [&](bool present) {
-                if (count >= N)
+                if (N && count >= N)
                     die("line " + to_string(lineno) + ": more than " + to_string(N) + " values");
                 if (present) bytes[count >> 3] |= (unsigned char)(1u << (count & 7));
                 count++;
@@ -210,17 +232,17 @@ int main(int argc, char** argv) {
                 size_t start = 0;
                 for (size_t i = 0; i <= vlen; i++) {
                     if (i == vlen || vals[i] == d) {
-                        // one field is [start, i)
                         bool present = !(i - start == 1 && vals[start] == '0');
                         set_bit(present);
                         start = i + 1;
                     }
                 }
             }
-            if (count != N)
+            if (N == 0) { N = count; n_bytes = (N + 7) / 8; }   // infer from first row
+            else if (count != N)
                 die("line " + to_string(lineno) + ": row has " + to_string(count) +
-                    " values but " + to_string(N) + " accessions were expected. Wrong "
-                    "-a/-n or --delimiter.");
+                    " values but " + to_string(N) + " accessions were expected. "
+                    "Wrong -a/-n or --delimiter.");
             obuf.assign(line.data(), tab);
             obuf += '\t';
             for (size_t b = 0; b < n_bytes; b++) { obuf += HEX[bytes[b] >> 4]; obuf += HEX[bytes[b] & 15]; }
@@ -230,7 +252,7 @@ int main(int argc, char** argv) {
     }
 
     gzclose(in);
-    if (out_gz) gzclose(gout);
+    if (gzip) gzclose(gout);
     else if (fout != stdout) fclose(fout);
     return 0;
 }

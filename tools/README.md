@@ -6,16 +6,13 @@ the pipeline.
 Prebuilt, statically linked **x86-64 Linux** binaries (committed here so you can
 run them without compiling; the same binaries are attached to each release):
 
-- **`kbin_dump`** — inspect or export a Stage 1 `.kbin` pack. Reads `k` from the
-  pack's footer, so one binary reads a pack of any k.
+- **`kbin_dump`** — inspect or export a Stage 1 `.kbin` pack: the whole pack to
+  stdout, or `--all_bins DIR` to write one file per bin under `DIR/<accession>/`,
+  decoded in parallel and gzipped in-process. Reads `k` from the pack's footer,
+  so one binary reads a pack of any k.
 - **`bits_to_text`** — convert the bit-packed matrix to and from text.
 
-Also here:
-
-- **`bits_to_text.py`** — a portable Python version of `bits_to_text`, with the
-  identical interface and output (no build needed; ~14× slower on large matrices).
-
-Usage for all three is documented in the top-level [README](../README.md). Being
+Usage for both is documented in the top-level [README](../README.md). Being
 statically linked, the binaries run on an HPC login node or a laptop regardless of
 its glibc / libstdc++ version.
 

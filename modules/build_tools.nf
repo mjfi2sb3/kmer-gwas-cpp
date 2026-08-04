@@ -6,10 +6,11 @@
 //   kbin_dump    — inspect a Stage 1 .kbin pack or export its k-mers as text.
 //
 // Unlike the per-job kmer_count/matrix_merge binaries (built with -march=native
-// for the compute node), these are built WITHOUT -march=native: they are small
-// I/O-bound utilities the user may run anywhere — a login node, a laptop — so
-// portability across CPUs matters more than the negligible speed-up. kbin_dump
-// reads a pack's k from its footer, so one binary reads a pack of any k.
+// for the compute node), these are built WITHOUT -march=native: they are utilities
+// the user may run anywhere — a login node, a laptop — so portability across CPUs
+// matters more than the speed-up. kbin_dump reads a pack's k from its footer, so
+// one binary reads a pack of any k; its --all_bins export is multi-threaded (and
+// links zlib for in-process gzip), hence the -pthread and -lz.
 process BUILD_TOOLS {
     publishDir "${params.output_dir}/bin", mode: 'copy', overwrite: true
 
@@ -20,6 +21,6 @@ process BUILD_TOOLS {
     script:
     """
     g++ -std=c++17 -O2 -o bits_to_text ${params.src_dir}/bits_to_text.cpp -lz
-    g++ -std=c++17 -O2 -o kbin_dump    ${params.src_dir}/kbin_dump.cpp
+    g++ -std=c++17 -O2 -pthread -o kbin_dump    ${params.src_dir}/kbin_dump.cpp -lz
     """
 }

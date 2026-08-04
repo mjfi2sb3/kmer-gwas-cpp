@@ -28,7 +28,7 @@ build-tools:
     - if: $CI_COMMIT_TAG
   script:
     - apt-get update && apt-get install -y zlib1g-dev
-    - g++ -std=c++17 -O2 -static -o kbin_dump    src/kbin_dump.cpp
+    - g++ -std=c++17 -O2 -pthread -static -o kbin_dump    src/kbin_dump.cpp -lz
     - g++ -std=c++17 -O2 -static -o bits_to_text src/bits_to_text.cpp -lz
     - ldd ./kbin_dump 2>&1 || true       # expect "not a dynamic executable"
     - ./kbin_dump --help > /dev/null && echo "kbin_dump built"

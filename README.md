@@ -249,25 +249,21 @@ A **prebuilt static (x86-64 Linux) binary is committed at
 [`tools/bits_to_text`](tools)**, and the same binary is attached to each
 tagged release, so you can run it without the pipeline. Every run also compiles a
 copy to `results/bin/bits_to_text`, so a results directory ships with the tool
-that reads it. A portable Python version,
-`tools/bits_to_text.py`, has the identical interface and output (the C++ one is
-~14× faster on large matrices; build it standalone with `make -C src bits_to_text`).
+that reads it.
 
-The accession count is always required — via the accessions file (`-a`, which
-also fixes column order) or `-n N`. It trims padding bits when decoding and
-checks the row width when encoding.
+Input may be plain or gzip (auto-detected). Output is **plain text by default**;
+add `--gzip` (or a `.gz` output name) to compress — but that gzip is
+single-threaded, so for a large matrix `plain | pigz` is faster.
 
 ```bash
-# decode: bits -> text  (default)
-results/bin/bits_to_text -a accessions.txt --delimiter tab \
-    results/matrix/matrix_*/0_matrix.tsv.gz  0_text.tsv.gz
+# encode: text -> bits. N and the delimiter are inferred from the row.
+results/bin/bits_to_text --encode -i 0_matrix.tsv -o 0_bits.tsv
 
-# encode: text -> bits  (compress an existing text matrix)
-results/bin/bits_to_text --encode -a accessions.txt --delimiter tab \
-    0_text.tsv.gz  0_bits.tsv.gz
+# decode: bits -> text (default). N is required (it trims byte padding).
+results/bin/bits_to_text --decode -n 10000 -i 0_bits.tsv -o 0_text.tsv
 
-# add an accession-name header row (decode only)
-results/bin/bits_to_text -a accessions.txt --header 0_matrix.tsv.gz  0_text.tsv
+# large matrix: plain output piped to parallel pigz
+results/bin/bits_to_text --decode -n 10000 -i 0_bits.tsv | pigz > 0_text.tsv.gz
 ```
 
 **Options**
@@ -275,20 +271,10 @@ results/bin/bits_to_text -a accessions.txt --header 0_matrix.tsv.gz  0_text.tsv
 | flag | meaning |
 |---|---|
 | `--decode` / `--encode` | direction; `--decode` (bits → text) is the default |
-| `-a <file>` / `-n <N>` | accession count (and, with `-a`, column order). Required |
-| `--delimiter tab\|space\|none` | separator of the **text** side, read or written |
-| `--header` | (decode only) prefix a `kmer<TAB>name…` header row; needs `-a` |
-| `[infile] [outfile]` | default stdin/stdout; `-` means the same |
-
-**Compression.** Input gzip is detected automatically (plain or `.gz`, either
-way). Output is gzip-compressed **only when the output filename ends in `.gz`**;
-otherwise it is plain text, and stdout is always plain. For a large matrix,
-prefer a `pigz` pipe — it compresses in parallel, whereas the built-in gzip is
-single-threaded:
-
-```bash
-pigz -dc 0_bits.tsv.gz | results/bin/bits_to_text -n 10000 --delimiter tab | pigz > 0_text.tsv.gz
-```
+| `-i <file>` / `-o <file>` | input / output (default stdin/stdout; positional also accepted) |
+| `--gzip`, `-z` | gzip the output (also implied by a `.gz` output name); single-threaded, prefer `\| pigz` for big files |
+| `-a <file>` / `-n <N>` | accession count. **Required for `--decode`** (trims padding); **optional for `--encode`** (inferred from the row, validated if given) |
+| `--delimiter tab\|space\|none` | separator of the **text** side. Default `none`; on `--encode` it is auto-detected from the row |
 
 When encoding, any value other than `0` counts as present, so a raw-count matrix
 (`--count y`) collapses to presence/absence if you pack it to bits.
@@ -312,11 +298,15 @@ ships a copy to `results/bin/kbin_dump`, and you can build it standalone with
 # peek: header summary (k, bins, record width, k-mer totals)
 results/bin/kbin_dump results/kmer_count_k51/ERS467753.kbin --info
 
-# export every k-mer to text (pipe to pigz to compress a large dump)
+# export every k-mer to text (pipe to pigz to compress a large stdout dump)
 results/bin/kbin_dump results/kmer_count_k51/ERS467753.kbin | pigz > ERS467753.kmers.tsv.gz
 
-# just one bin, with a bin-index column
-results/bin/kbin_dump results/kmer_count_k51/ERS467753.kbin --bin 42 --with-bin
+# just one bin, to stdout
+results/bin/kbin_dump results/kmer_count_k51/ERS467753.kbin --bin 42
+
+# export the WHOLE pack, one file per bin, decoded in parallel and gzipped
+# in-process -> ./export/ERS467753/<bin>.tsv.gz  (use --no-gzip for plain text)
+results/bin/kbin_dump results/kmer_count_k51/ERS467753.kbin --all_bins ./export
 ```
 
 **Options**
@@ -324,12 +314,16 @@ results/bin/kbin_dump results/kmer_count_k51/ERS467753.kbin --bin 42 --with-bin
 | flag | meaning |
 |---|---|
 | `--info` | print a header summary (k, version, bins, record width, k-mer totals) and exit |
-| `--bin N` | dump only bin N |
-| `--with-bin` | prepend a `<bin><TAB>` column to each row |
+| `--bin N` | dump only bin N to stdout |
+| `--all_bins DIR` | write one file per bin into `DIR/<accession>/<N>.tsv.gz`, decoded across all cores and gzipped in-process (no `pigz` pipe needed). `<accession>` is the pack's filename prefix, so several packs can share one `DIR` |
+| `--no-gzip` | with `--all_bins`, write plain text (`<N>.tsv`) instead of gzip |
+| `--threads T` | workers for `--all_bins` (default: all cores) |
 
 The k-mers come out canonicalised and sorted within each bin, exactly as Stage 2
-reads them. Output is plain text (no gzip is built in), so pipe to `gzip` or `pigz`
-for a compressed export.
+reads them. A single stdout dump is plain text (pipe to `gzip`/`pigz` to compress);
+`--all_bins` compresses in parallel in-process. At a low bin count `--all_bins`
+parallelism is capped by the number of bins, so a `pigz` pipe can be faster there;
+with many bins the two are comparable.
 
 ---
 
@@ -355,8 +349,9 @@ for a compressed export.
 | `--matrix_merge_memory` | `16.GB` | RAM per MATRIX_MERGE job. Use dot notation: `16.GB`, `64.GB`, `128.GB`. Memory is `O(matrix_merge_cpus × accessions)` (a small read buffer per accession in each concurrent shard worker) and independent of genome size — about 7 GB for a 12,600-accession panel at the default 16 CPUs, so 16 GB has headroom |
 | `--kmer_count_time` | `5h` | Wallclock time limit per KMER_COUNT job. Examples: `'2h'`, `'5h'`, `'1d'`, `'2h 30m'` |
 | `--matrix_merge_time` | `10h` | Wallclock time limit per MATRIX_MERGE job. Examples: `'5h'`, `'10h'`, `'1d'`, `'2h 30m'` |
-| `--cleanup` | `true` | Delete Nextflow work directory on successful completion. Pass `--cleanup false` to preserve work dirs for debugging or `-resume` |
+| `--cleanup` | `false` | Delete the Nextflow work directory on successful completion. Default `false` keeps it so `-resume` can skip finished work; pass `--cleanup true` to delete on success (which disables `-resume`) |
 | `--publish_mode` | `link` | How each Stage 1 pack reaches `output_dir`. `link`: hard link — no second copy of the data and `-resume` can skip finished accessions, but `output_dir` and the work dir must be on the **same filesystem** (checked at launch). `copy`: a second copy, works on any layout at ~2× storage. `move`: no second copy but `-resume` cannot skip finished accessions. See *Resuming a run* below |
+| `--compress_kbin_packs` | `true` | After **both** stages finish successfully, gzip the published `.kbin` packs (one job per accession, gated on all of Stage 2, so a pack is never compressed while it might still be read). Modest gain (~1.5–2×; the packed keys barely compress). Re-running Stage 2 then needs them decompressed first. With `--publish_mode link` + `--cleanup false` nothing is reclaimed until the work dir is removed — a launch warning notes this |
 | `--clusterOptions` | _(none)_ | Extra SLURM flags passed to every job (see note below) |
 | `--queue_size` | `200` | Maximum number of jobs the SLURM executor keeps submitted (queued + running) at once |
 | `--singularity_cache_dir` | `./.singularity` | Local path for Singularity image cache |
@@ -420,7 +415,7 @@ for a compressed export.
 
 To be able to `-resume` (re-run only the accessions that failed, skipping the ones that finished), two things are needed:
 
-1. **`--cleanup false`** — keep the work directory (`-resume` reads its cache; the default `--cleanup true` deletes it).
+1. **`--cleanup false`** (the default) — keep the work directory so `-resume` can read its cache; `--cleanup true` deletes it on success.
 2. **`--publish_mode link`** (the default) or **`copy`** — the Stage 1 pack must remain in the work directory for Nextflow to recognise a finished accession. With `--publish_mode move` the pack is moved out, so `-resume` re-runs every accession.
 
 `link` is preferred because it keeps the storage footprint of `move` (no second copy of the multi-GB packs) while still allowing resume; it just requires `--output_dir` and the work directory to be on the same filesystem (the pipeline checks this at launch and tells you if they are not). If they must be on different filesystems, use `--publish_mode copy`.
@@ -587,7 +582,7 @@ num_bins ≈ (num_accessions × genome_size_bp × coverage × 8 bytes) / availab
 
 **Resuming a run**
 
-Nextflow caches completed work in the `work/` directory. The default (`--cleanup true`) deletes that directory once a run completes successfully, to save storage and inodes — which also means **a successfully cleaned-up run cannot be resumed**, because the cache it would resume from is gone.
+Nextflow caches completed work in the `work/` directory. `--cleanup true` deletes that directory once a run completes successfully, to save storage and inodes — which also means **a cleaned-up run cannot be resumed**, because the cache it would resume from is gone. The default is `--cleanup false` (work is kept).
 
 To keep the option of resuming, run with `--cleanup false`. A run that *failed* always keeps its work directory regardless of the setting, so debugging a failure never requires it. Resume with:
 
@@ -604,7 +599,7 @@ Inode use no longer scales with `--num_bins`. KMER_COUNT writes exactly one file
 
 Stage 1 also publishes with `mode: 'move'` rather than `'copy'`, so a pack exists in exactly one place instead of being duplicated between the work and results directories for the duration of the run.
 
-Work directories are removed on successful completion (`--cleanup true`, the default), further reducing inode usage.
+Work directories can be removed on successful completion with `--cleanup true` (the default is `false`, keeping them for `-resume`), further reducing inode usage.
 
 To preserve work directories for debugging or `-resume`, pass `--cleanup false`.
 
@@ -640,7 +635,6 @@ nextflow run main.nf --help
 ├── tools/
 │   ├── kbin_dump            # prebuilt static binary: inspect/export .kbin packs
 │   ├── bits_to_text         # prebuilt static binary: bit-packed matrix <-> text
-│   ├── bits_to_text.py      # portable Python twin of src/bits_to_text.cpp
 │   └── README.md            # what is in this folder
 ├── Dockerfile               # Container image definition
 ├── .gitlab-ci.yml           # CI/CD pipeline (auto-build + release on tag)

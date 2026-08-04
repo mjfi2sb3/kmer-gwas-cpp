@@ -1,9 +1,10 @@
 #!/usr/bin/env nextflow
 nextflow.enable.dsl = 2
 
-include { KMER_COUNT   } from './modules/kmer_count'
-include { MATRIX_MERGE } from './modules/matrix_merge'
-include { BUILD_TOOLS  } from './modules/build_tools'
+include { KMER_COUNT    } from './modules/kmer_count'
+include { MATRIX_MERGE  } from './modules/matrix_merge'
+include { BUILD_TOOLS   } from './modules/build_tools'
+include { COMPRESS_PACKS } from './modules/compress_packs'
 
 // ---------------------------------------------------------------------------
 // Help
@@ -85,6 +86,12 @@ def helpMessage() {
         --publish_mode           How Stage 1 packs reach output_dir:                [default: link]
                                  link (hardlink; enables -resume, same filesystem), copy (~2x storage),
                                  or move (lowest footprint, no -resume).
+        --compress_kbin_packs    gzip the published .kbin packs after BOTH stages     [default: ${params.compress_kbin_packs}]
+                                 finish (modest, ~1.5-2x: the packed keys barely
+                                 compress; the gain varies with k and coverage). Runs
+                                 only on full success; re-running Stage 2 then needs
+                                 them decompressed first. With publish_mode link +
+                                 cleanup false it saves nothing until work is removed.
 
     Profiles:
         -profile standard           Run locally
@@ -168,8 +175,9 @@ def paramSummary(String accessions_file, String data_dir) {
         row('max_memory/cpus/time',  "${params.max_memory} / ${params.max_cpus} / ${params.max_time}"),
         row('singularity_cache_dir', params.singularity_cache_dir),
         head('Work directory and publishing'),
-        row('publish_mode', params.publish_mode),
-        row('cleanup',      params.cleanup),
+        row('publish_mode',      params.publish_mode),
+        row('cleanup',           params.cleanup),
+        row('compress_kbin_packs', params.compress_kbin_packs),
         "    ${c_banner}-----------------------------------------${c_reset}",
         ""
     ]
@@ -302,6 +310,15 @@ workflow {
                     "Use --publish_mode copy, or point --output_dir at the same filesystem as the work dir."
     }
 
+    // --compress_kbin_packs only reclaims space if the uncompressed packs are
+    // actually gone. With publish_mode 'link' + cleanup=false the pack survives as
+    // a hard link in the work dir, so compressing the published copy only ADDS the
+    // .gz until the work dir is removed. Warn rather than fail (option (a)).
+    if (params.compress_kbin_packs && params.publish_mode == 'link' && !params.cleanup)
+        log.warn "--compress_kbin_packs is on, but with --publish_mode link and --cleanup false " +
+                 "the uncompressed packs remain hard-linked in the work dir, so no space is " +
+                 "reclaimed until it is removed. Use --cleanup true (or --publish_mode move)."
+
     // Resolve to absolute paths — relative inputs break inside Singularity
     // containers and SLURM work directories
     def accessions_file = file(params.accessions_file).toAbsolutePath().toString()
@@ -355,4 +372,13 @@ workflow {
 
     // -- Stage 2: matrix merge, one job per bin --
     MATRIX_MERGE(ch_bins_ready, file(accessions_file))
+
+    // -- Optional: compress the published packs, one job per accession, only AFTER
+    //    every bin's MATRIX_MERGE has finished (gated on the collected outputs), so
+    //    a pack is never compressed while it might still be read. See the module.
+    if (params.compress_kbin_packs) {
+        ch_gate = MATRIX_MERGE.out.matrix_file.collect().map { true }
+        ch_accs = KMER_COUNT.out.accession_pack.map { acc, pack -> acc }
+        COMPRESS_PACKS(ch_accs.combine(ch_gate), kmer_count_root)
+    }
 }

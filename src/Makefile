@@ -34,7 +34,7 @@ $(BIN)/bits_to_text: bits_to_text.cpp
 
 # Standalone; reads the pack's k from its footer, so one binary reads any pack.
 $(BIN)/kbin_dump: kbin_dump.cpp
-	$(CXX) $(CXXFLAGS) -o $@ kbin_dump.cpp
+	$(CXX) $(CXXFLAGS) -o $@ kbin_dump.cpp -lz
 
 # Round-trip one synthetic accession through both stages.
 test: all

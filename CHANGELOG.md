@@ -4,6 +4,36 @@ All notable changes to this pipeline are documented here.
 Versions follow [semantic versioning](https://semver.org): the major number is
 bumped when output or interfaces change in a backwards-incompatible way.
 
+## v3.7.3
+
+Overhauls the two helper tools and adds optional pack compression. No matrix
+output changes.
+
+### Added
+
+- **`--compress_kbin_packs`** (default `true`) — after **both** stages finish
+  successfully, gzip the published `.kbin` packs, one job per accession, gated on
+  all of Stage 2 so a pack is never compressed while it might still be read. The
+  gain is modest (~1.5–2×: the 2-bit-packed keys barely compress). Re-running
+  Stage 2 needs the packs decompressed first. With `--publish_mode link` +
+  `--cleanup false` the uncompressed pack survives in the work dir, so nothing is
+  reclaimed until it is removed — a launch warning notes this.
+
+### Changed
+
+- **`kbin_dump`**: removed `--with-bin`; added **`--all_bins DIR`**, which writes
+  one file per bin into `DIR/<accession>/<N>.tsv.gz`, decoding across all cores and
+  gzipping in-process (no `pigz` pipe). Memory is bounded (~tens of MB) via a
+  streamed reader regardless of bin size. `--no-gzip` and `--threads` opt-outs.
+- **`bits_to_text`**: `-i/-o` flags; output is now **plain by default** (its gzip
+  is single-threaded — `--gzip` opt-in, or pipe to `pigz`); `--encode` infers the
+  accession count from the row and **auto-detects the delimiter** (default `none`),
+  fixing the common "row has 1 value" error on a default (`--delimiter none`)
+  matrix; `--header` removed. `--decode` still needs `-a/-n` to trim byte padding.
+- **Removed `tools/bits_to_text.py`** — the C++ binary is authoritative.
+- Corrected README: the `--cleanup` default is `false` (was still documented as
+  `true` in places), plus the tool sections above.
+
 ## v3.7.2
 
 Renames the `--core` flag and corrects its documentation. No output changes, and
