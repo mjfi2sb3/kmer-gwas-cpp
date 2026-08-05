@@ -33,12 +33,13 @@ def helpMessage() {
                                  Keeps k-mers in [threshold, n_acc - threshold] accessions.
                                  Filters on HOW MANY ACCESSIONS carry the k-mer, not on
                                  its count within an accession. 0 disables the filter.
-        --keep_kmer_counts       'y' = keep actual kmer counts, 'n' = presence/absence               [default: ${params.count}]
+        --keep_kmer_counts       'y' = keep raw kmer counts, 'n' = presence/absence   [default: ${params.keep_kmer_counts}]
+                                 (--count is a deprecated alias)
         --delimiter              Value separator (text encoding): 'tab','space','none' [default: ${params.delimiter}]
                                  'none' concatenates and is presence/absence only.
         --encoding               Matrix encoding: 'text' or 'bits'                  [default: ${params.encoding}]
                                  'bits' packs presence/absence 1 bit per accession
-                                 as hex (~8x smaller than tab); requires --count n.
+                                 as hex (~8x smaller than tab); requires --keep_kmer_counts n.
         --write_core_kmers       Write k-mers present in ALL accessions to a         [default: ${params.write_core_kmers}]
                                  per-bin <bin>_core.txt file. Independent of every
                                  other flag: it only adds this file and never changes
@@ -127,6 +128,11 @@ if (params.publish_mode != null) {
              "honouring it as --kmer_count_publish_mode ${params.kmer_count_publish_mode}. " +
              "Please switch, as --publish_mode will be removed in a future release."
 }
+if (params.count != null) {
+    log.warn "--count is deprecated and was renamed to --keep_kmer_counts; " +
+             "honouring it as --keep_kmer_counts ${params.keep_kmer_counts}. " +
+             "Please switch, as --count will be removed in a future release."
+}
 
 
 // ---------------------------------------------------------------------------
@@ -166,7 +172,7 @@ def paramSummary(String accessions_file, String data_dir) {
         row('num_bins',       params.num_bins),
         row('min_kmer_count', params.min_kmer_count),
         row('threshold',      params.threshold),
-        row('keep kmer counts',          params.count),
+        row('keep kmer counts',          params.keep_kmer_counts),
         row('delimiter',      params.delimiter),
         row('encoding',       params.encoding),
         row('write_core_kmers', params.write_core_kmers),
@@ -221,7 +227,7 @@ def writeManifest(String accessions_file, String data_dir, int n_accessions) {
         num_bins            = ${params.num_bins}
         min_kmer_count      = ${params.min_kmer_count}
         threshold           = ${params.threshold}
-        keep_kmer_counts    = ${params.count}
+        keep_kmer_counts    = ${params.keep_kmer_counts}
         delimiter           = ${params.delimiter}
         encoding            = ${params.encoding}
         write_core_kmers    = ${params.write_core_kmers}
@@ -294,10 +300,10 @@ workflow {
         exit 1, "ERROR: --delimiter must be 'tab', 'space' or 'none' (got '${params.delimiter}'). 'bits' is now --encoding bits."
     if (!(params.encoding in ['text', 'bits']))
         exit 1, "ERROR: --encoding must be 'text' or 'bits' (got '${params.encoding}')."
-    if (params.encoding == 'bits' && params.count == 'y')
-        exit 1, "ERROR: --encoding bits is presence/absence only; it cannot be combined with --count y."
-    if (params.encoding == 'text' && params.delimiter == 'none' && params.count == 'y')
-        exit 1, "ERROR: --delimiter none cannot be combined with --count y (multi-digit counts would be unparseable). Use --delimiter tab or space."
+    if (params.encoding == 'bits' && params.keep_kmer_counts == 'y')
+        exit 1, "ERROR: --encoding bits is presence/absence only; it cannot be combined with --keep_kmer_counts y."
+    if (params.encoding == 'text' && params.delimiter == 'none' && params.keep_kmer_counts == 'y')
+        exit 1, "ERROR: --delimiter none cannot be combined with --keep_kmer_counts y (multi-digit counts would be unparseable). Use --delimiter tab or space."
 
     // Validate the publish mode, and for 'link' fail here if output_dir and the
     // work dir are on different filesystems. A hard link cannot cross filesystems,
@@ -377,13 +383,19 @@ workflow {
             }
         }
 
-    // One directory path per bin, not one path per accession: MATRIX_MERGE stages
-    // it as a single symlink. Passing the packs individually through the channel
-    // would cost one symlink per accession per bin task (millions of inodes for a
-    // large cohort at queueSize 200), which is worse than the extraction it replaced.
+    // One directory per bin, passed as a VALUE (absolute path string), not a
+    // Nextflow `path` input. Two reasons: (1) passing the packs individually would
+    // cost one staged symlink per accession per bin task (millions of inodes for a
+    // large cohort at queueSize 200); (2) the pack directory is the PUBLISHED
+    // output_dir, which is mutated after a run — re-publish timestamps, and
+    // --compress_kbin_packs rewrites each .kbin to .kbin.gz in place. Hashing it as
+    // a `path` input made -resume always re-run MATRIX_MERGE (and, once packs were
+    // gzipped, fail). As a value the cache key is the stable path string; correct
+    // invalidation still comes from k (in the path), the accessions file, and the
+    // Stage-2 params baked into the script (see the signature line in the module).
     ch_bins_ready = ch_bin_signals
         .groupTuple()                           // group by bin_idx; size == num_accessions
-        .map { bin_idx, roots -> tuple(bin_idx, file(roots[0])) }
+        .map { bin_idx, roots -> tuple(bin_idx, roots[0]) }
 
     // -- Stage 2: matrix merge, one job per bin --
     MATRIX_MERGE(ch_bins_ready, file(accessions_file))

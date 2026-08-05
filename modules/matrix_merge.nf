@@ -5,15 +5,20 @@
 // inside every pack; nothing is unpacked to disk first and no per-bin temporary
 // files are created.
 //
-// The pack directory is staged as a single directory symlink (one input to the
-// task) rather than one input per accession. With large cohorts, staging the
-// packs individually would create one symlink per accession for every bin task.
+// The pack directory is passed as a value (an absolute path the task reads
+// directly), not a Nextflow `path` input. With large cohorts, staging the packs
+// individually would create one symlink per accession for every bin task; and the
+// directory is the published output_dir, which is mutated after a run (re-publish
+// timestamps, and --compress_kbin_packs rewriting each .kbin to .kbin.gz). Hashing
+// it as a `path` broke -resume — see the note in main.nf. The `# cache signature`
+// line below folds the Stage-1 pack-affecting param that is not otherwise in this
+// script (min_kmer_count) into the task hash, so changing it re-runs the merge.
 process MATRIX_MERGE {
     tag "bin_${bin_idx}"
     publishDir "${params.output_dir}/matrix", mode: params.matrix_publish_mode, overwrite: true
 
     input:
-        tuple val(bin_idx), path(kmer_dir)
+        tuple val(bin_idx), val(kmer_dir)
         val accessions_file
 
     output:
@@ -22,6 +27,9 @@ process MATRIX_MERGE {
 
     script:
     """
+    # cache signature (do not remove): folds Stage-1 pack-affecting params into this
+    # task's hash so -resume re-runs the merge when they change. min_kmer_count=${params.min_kmer_count}
+    #
     # -DKMER_K must match the value KMER_COUNT used. A mismatch is caught at run
     # time by the pack footer, but building consistently avoids the error.
     g++ -std=c++17 -O3 -march=native -pthread -DKMER_K=${params.kmer_size} -o matrix_merge \
@@ -34,7 +42,7 @@ process MATRIX_MERGE {
         --threshold  ${params.threshold} \\
         --delimiter  ${params.delimiter} \\
         --encoding   ${params.encoding} \\
-        --count      ${params.count} \\
+        --count      ${params.keep_kmer_counts} \\
         --core       ${params.write_core_kmers ? 'y' : 'n'} \\
         --bins       ${params.num_bins} \\
         --threads    ${task.cpus}

@@ -4,6 +4,28 @@ All notable changes to this pipeline are documented here.
 Versions follow [semantic versioning](https://semver.org): the major number is
 bumped when output or interfaces change in a backwards-incompatible way.
 
+## v3.7.5
+
+Fixes `-resume` for Stage 2, and renames the count flag. No output change.
+
+### Fixed
+
+- **`-resume` now caches `MATRIX_MERGE`.** Its input was the published pack
+  directory (`output_dir/kmer_count_k<k>/`), which is mutated after a run —
+  re-publish timestamps, and `--compress_kbin_packs` rewriting each `.kbin` to
+  `.kbin.gz` in place — so the task hash changed on every resume and the whole
+  merge re-ran (and, once packs were gzipped, could not find them). The directory
+  is now passed as a value (a stable path string the task reads directly) rather
+  than a hashed `path` input. Correct invalidation is preserved: `k` is in the
+  path, the accessions file stays a tracked input, and the Stage-2 params plus
+  `min_kmer_count` are folded into the task's script hash.
+
+### Changed
+
+- Renamed **`--count` → `--keep_kmer_counts`** (the bare name was easily confused
+  with `--min_kmer_count`). `--count` is kept as a **deprecated alias** (a launch
+  warning notes the rename); it will be removed in a future release.
+
 ## v3.7.4
 
 Separate publish mode for the Stage 2 matrix, and a codebase-wide comment

@@ -280,7 +280,7 @@ results/bin/bits_to_text --decode -n 10000 -i 0_bits.tsv | pigz > 0_text.tsv.gz
 | `--delimiter tab\|space\|none` | separator of the **text** side. Default `none`; on `--encode` it is auto-detected from the row |
 
 When encoding, any value other than `0` counts as present, so a raw-count matrix
-(`--count y`) collapses to presence/absence if you pack it to bits.
+(`--keep_kmer_counts y`) collapses to presence/absence if you pack it to bits.
 
 ---
 
@@ -346,7 +346,7 @@ with many bins the two are comparable.
 | `--num_bins` | `1500` | Number of k-mer bins. Now a parallelism / output-file-size knob: it no longer has to grow with genome size, because Stage 2 memory is independent of the number of distinct k-mers |
 | `--min_kmer_count` | `2` | Drop k-mers seen fewer than this many times within an accession. Low counts are overwhelmingly sequencing errors; raising it shrinks Stage 1 output and everything downstream |
 | `--threshold` | `0` | Two-sided MAF filter on the number of **accessions** carrying a k-mer. Keeps only k-mers present in `[threshold, num_accessions - threshold]` accessions; `0` disables it (see note below) |
-| `--count` | `n` | `y` = raw counts, `n` = presence/absence. Per-accession counts are 16-bit and saturate at 65535 (a k-mer occurring more often is recorded as 65535) |
+| `--keep_kmer_counts` | `n` | `y` = raw counts, `n` = presence/absence. Per-accession counts are 16-bit and saturate at 65535 (a k-mer occurring more often is recorded as 65535) |
 | `--encoding` | `text` | Matrix encoding: `text` (delimited) or `bits` (1 bit per accession as hex, ~8× smaller; presence/absence only). See note below |
 | `--delimiter` | `none` | Value separator for the **text** encoding: `tab`, `space` or `none`. `none` concatenates single characters and is presence/absence only |
 | `--write_core_kmers` | `false` | Write a per-bin `<bin>_core.txt` listing k-mers present in **all** accessions. Independent of every other flag: it only adds this file and never changes the matrix (see note below) |
@@ -382,7 +382,7 @@ with many bins the two are comparable.
 > k-mer is always tab-separated from the values; `--delimiter` separates the
 > values from each other.
 >
-> - **`--count`** — what each cell holds: `n` presence/absence (default), or `y` a raw count.
+> - **`--keep_kmer_counts`** — what each cell holds: `n` presence/absence (default), or `y` a raw count.
 > - **`--encoding`** — `text` (default) writes the values as characters; `bits` packs presence/absence one bit per accession, written as hex.
 > - **`--delimiter`** (text encoding only) — `none` (default) concatenates, `tab`, or `space`.
 >
@@ -396,7 +396,7 @@ with many bins the two are comparable.
 > | bits | n | *(ignored)* | `KMER⇥05` (hex) |
 > | bits | y | — | **rejected** — bits is presence/absence only |
 >
-> `none` and `bits` both require `--count n` for the same reason: their values
+> `none` and `bits` both require `--keep_kmer_counts n` for the same reason: their values
 > cannot be told apart once a value needs more than one character.
 >
 > **Size at scale**, per matrix row:
@@ -560,7 +560,7 @@ For each bin:
 1. Opens one streaming cursor per accession, seeking straight to that bin's slice inside each pack.
 2. K-way merges the sorted slices through a heap, emitting each distinct k-mer once. Memory is proportional to the number of accessions, not to the number of distinct k-mers.
 3. Outputs a tab-separated matrix: rows = k-mers, columns = accessions.
-4. Applies the two-sided `--threshold` MAF filter on accession occurrence, and formats each row's values according to `--count` and `--delimiter`.
+4. Applies the two-sided `--threshold` MAF filter on accession occurrence, and formats each row's values according to `--keep_kmer_counts` and `--delimiter`.
 5. If `--write_core_kmers` is set, additionally writes the k-mers present in every accession to a separate `<bin>_core.txt` — an independent side output that does not affect the matrix.
 6. Runs in parallel, controlled via `--threads` (set by `--matrix_merge_cpus`). The bin's key space is split into contiguous shards (the top bits of the k-mer key, which are its sort prefix) that are merged concurrently and concatenated in order, so the output is byte-identical to a single-threaded run.
 
