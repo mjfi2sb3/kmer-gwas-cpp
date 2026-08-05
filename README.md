@@ -100,20 +100,23 @@ Validated on real rice data against the previous implementation:
   than one character. At 10,000 accessions a matrix row shrinks from 20,051 to
   2,552 bytes, ~8× smaller, encoding exactly the same information.
 - **`--min_kmer_count`** — drop k-mers seen fewer than *n* times within an
-  accession. Low counts are overwhelmingly sequencing errors; this was previously
-  hardcoded.
+  accession (default 2, i.e. drop singletons). Low counts are overwhelmingly
+  sequencing errors.
 
-### Compatibility
+### Output format notes
 
-Output is identical to the previous implementation apart from two deliberate
-fixes: a spurious second tab after the k-mer column is gone, and poly-A k-mers
-(`AAA…A`) are no longer silently discarded — the all-zero encoding of poly-A had
-been colliding with the marker used for "this window contained an ambiguous base".
-Anything that parses the matrix should be checked against the new format.
+The matrix has one row per k-mer: the k-mer, then one value per accession. In
+text encoding the values are joined by `--delimiter`; with `--encoding bits` the
+per-accession presence bits are packed to hex (`bits_to_text` converts between the
+two). k-mers are canonicalised and sorted within each bin, and each field is
+separated by exactly one delimiter, so a parser only needs to split on it.
 
-The k-mer length now appears in the output directory names, so results produced at
-different *k* cannot be mixed up. Existing intermediate files from previous runs
-are not readable by the new code and should be regenerated.
+poly-A k-mers (`AAA…A`) are represented like any other and are never dropped by
+the encoding — the counter treats no k-mer as a sentinel. Windows containing a
+non-ACGT base are the only ones skipped.
+
+The k-mer length appears in the output directory names (`kmer_count_k<k>/`), so
+results produced at different *k* cannot be mixed up.
 
 Full measurements and methodology are in
 **[docs/BENCHMARKS.md](docs/BENCHMARKS.md)**.
@@ -294,6 +297,11 @@ tagged release, so it is ready to run on a login node or laptop. Every run also
 ships a copy to `results/bin/kbin_dump`, and you can build it standalone with
 `make -C src kbin_dump`.
 
+`kbin_dump` reads a pack by seeking to its footer index, so it needs the
+**uncompressed** `.kbin`. If you ran with `--compress_kbin_packs` (the default),
+the archived packs are `.kbin.gz`; decompress first — `pigz -dc pack.kbin.gz >
+pack.kbin` — and the tool prints exactly this hint if handed a compressed pack.
+
 ```bash
 # peek: header summary (k, bins, record width, k-mer totals)
 results/bin/kbin_dump results/kmer_count_k51/ERS467753.kbin --info
@@ -338,7 +346,7 @@ with many bins the two are comparable.
 | `--num_bins` | `1500` | Number of k-mer bins. Now a parallelism / output-file-size knob: it no longer has to grow with genome size, because Stage 2 memory is independent of the number of distinct k-mers |
 | `--min_kmer_count` | `2` | Drop k-mers seen fewer than this many times within an accession. Low counts are overwhelmingly sequencing errors; raising it shrinks Stage 1 output and everything downstream |
 | `--threshold` | `0` | Two-sided MAF filter on the number of **accessions** carrying a k-mer. Keeps only k-mers present in `[threshold, num_accessions - threshold]` accessions; `0` disables it (see note below) |
-| `--count` | `n` | `y` = raw counts, `n` = presence/absence |
+| `--count` | `n` | `y` = raw counts, `n` = presence/absence. Per-accession counts are 16-bit and saturate at 65535 (a k-mer occurring more often is recorded as 65535) |
 | `--encoding` | `text` | Matrix encoding: `text` (delimited) or `bits` (1 bit per accession as hex, ~8× smaller; presence/absence only). See note below |
 | `--delimiter` | `none` | Value separator for the **text** encoding: `tab`, `space` or `none`. `none` concatenates single characters and is presence/absence only |
 | `--write_core_kmers` | `false` | Write a per-bin `<bin>_core.txt` listing k-mers present in **all** accessions. Independent of every other flag: it only adds this file and never changes the matrix (see note below) |
@@ -350,8 +358,9 @@ with many bins the two are comparable.
 | `--kmer_count_time` | `5h` | Wallclock time limit per KMER_COUNT job. Examples: `'2h'`, `'5h'`, `'1d'`, `'2h 30m'` |
 | `--matrix_merge_time` | `10h` | Wallclock time limit per MATRIX_MERGE job. Examples: `'5h'`, `'10h'`, `'1d'`, `'2h 30m'` |
 | `--cleanup` | `false` | Delete the Nextflow work directory on successful completion. Default `false` keeps it so `-resume` can skip finished work; pass `--cleanup true` to delete on success (which disables `-resume`) |
-| `--publish_mode` | `link` | How each Stage 1 pack reaches `output_dir`. `link`: hard link — no second copy of the data and `-resume` can skip finished accessions, but `output_dir` and the work dir must be on the **same filesystem** (checked at launch). `copy`: a second copy, works on any layout at ~2× storage. `move`: no second copy but `-resume` cannot skip finished accessions. See *Resuming a run* below |
-| `--compress_kbin_packs` | `true` | After **both** stages finish successfully, gzip the published `.kbin` packs (one job per accession, gated on all of Stage 2, so a pack is never compressed while it might still be read). Modest gain (~1.5–2×; the packed keys barely compress). Re-running Stage 2 then needs them decompressed first. With `--publish_mode link` + `--cleanup false` nothing is reclaimed until the work dir is removed — a launch warning notes this |
+| `--kmer_count_publish_mode` | `link` | How each Stage 1 pack reaches `output_dir`. `link`: hard link — no second copy of the data and `-resume` can skip finished accessions, but `output_dir` and the work dir must be on the **same filesystem** (checked at launch). `copy`: a second copy, works on any layout at ~2× storage. `move`: no second copy but `-resume` cannot skip finished accessions. `--publish_mode` is a deprecated alias for this flag. See *Resuming a run* below |
+| `--matrix_publish_mode` | `link` | How the Stage 2 matrix reaches `output_dir`; same choices as `--kmer_count_publish_mode`. `link` is safe for the matrix — it is already gzipped and never re-compressed, so nothing breaks the hard link — and avoids duplicating what is one of the largest outputs of a big run. A hard link survives `--cleanup`. Use `copy` for a fully independent archival copy of the result |
+| `--compress_kbin_packs` | `true` | After **both** stages finish successfully, gzip the published `.kbin` packs (one job per accession, gated on all of Stage 2, so a pack is never compressed while it might still be read). Modest gain (~1.5–2×; the packed keys barely compress). Re-running Stage 2 then needs them decompressed first. With `--kmer_count_publish_mode link` + `--cleanup false` nothing is reclaimed until the work dir is removed — a launch warning notes this |
 | `--clusterOptions` | _(none)_ | Extra SLURM flags passed to every job (see note below) |
 | `--queue_size` | `200` | Maximum number of jobs the SLURM executor keeps submitted (queued + running) at once |
 | `--singularity_cache_dir` | `./.singularity` | Local path for Singularity image cache |
@@ -416,9 +425,9 @@ with many bins the two are comparable.
 To be able to `-resume` (re-run only the accessions that failed, skipping the ones that finished), two things are needed:
 
 1. **`--cleanup false`** (the default) — keep the work directory so `-resume` can read its cache; `--cleanup true` deletes it on success.
-2. **`--publish_mode link`** (the default) or **`copy`** — the Stage 1 pack must remain in the work directory for Nextflow to recognise a finished accession. With `--publish_mode move` the pack is moved out, so `-resume` re-runs every accession.
+2. **`--kmer_count_publish_mode link`** (the default) or **`copy`** — the Stage 1 pack must remain in the work directory for Nextflow to recognise a finished accession. With `--kmer_count_publish_mode move` the pack is moved out, so `-resume` re-runs every accession. (`--publish_mode` is a deprecated alias for this flag.)
 
-`link` is preferred because it keeps the storage footprint of `move` (no second copy of the multi-GB packs) while still allowing resume; it just requires `--output_dir` and the work directory to be on the same filesystem (the pipeline checks this at launch and tells you if they are not). If they must be on different filesystems, use `--publish_mode copy`.
+`link` is preferred because it keeps the storage footprint of `move` (no second copy of the multi-GB packs) while still allowing resume; it just requires `--output_dir` and the work directory to be on the same filesystem (the pipeline checks this at launch and tells you if they are not). If they must be on different filesystems, use `--kmer_count_publish_mode copy`.
 
 ```bash
 # first run

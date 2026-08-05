@@ -1,16 +1,16 @@
-// Stage 2 — build one bin's matrix by k-way merging every accession's pack slice.
+// Stage 2 — build one bin's presence/absence matrix by k-way merging the
+// matching bin slice from every accession's pack.
 //
-// The previous version extracted `<acc>/<bin>_nr.bin` out of each accession's
-// tar into a local `extracted/` directory: 12,600 directories plus 12,600 files
-// PER bin task, ~5M live inodes at queueSize 200. That step is gone entirely —
-// matrix_merge seeks straight to the bin it needs inside each pack.
+// Each pack is self-indexed, so matrix_merge seeks directly to the bin it needs
+// inside every pack; nothing is unpacked to disk first and no per-bin temporary
+// files are created.
 //
-// `kmer_dir` is staged as ONE directory symlink rather than 12,600 individual
-// file inputs. Staging the files individually would cost 12,600 symlinks per
-// bin task, which is worse than what it replaced.
+// The pack directory is staged as a single directory symlink (one input to the
+// task) rather than one input per accession. With large cohorts, staging the
+// packs individually would create one symlink per accession for every bin task.
 process MATRIX_MERGE {
     tag "bin_${bin_idx}"
-    publishDir "${params.output_dir}/matrix", mode: 'copy', overwrite: true
+    publishDir "${params.output_dir}/matrix", mode: params.matrix_publish_mode, overwrite: true
 
     input:
         tuple val(bin_idx), path(kmer_dir)

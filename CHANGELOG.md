@@ -4,6 +4,35 @@ All notable changes to this pipeline are documented here.
 Versions follow [semantic versioning](https://semver.org): the major number is
 bumped when output or interfaces change in a backwards-incompatible way.
 
+## v3.7.4
+
+Separate publish mode for the Stage 2 matrix, and a codebase-wide comment
+cleanup for public readers. No output or matrix format changes.
+
+### Added
+
+- **`kbin_dump`** now detects a gzip-compressed pack (`.kbin.gz`, e.g. left by
+  `--compress_kbin_packs`) and exits with an actionable message telling you to
+  decompress it first (`pigz -dc …`), instead of failing with a cryptic "bad
+  magic". `kbin_dump` seeks by the footer index, so it needs the uncompressed pack.
+- **`--matrix_publish_mode`** (default `link`) — controls how the Stage 2 matrix
+  reaches `output_dir`, with the same `link`/`copy`/`move` choices as the Stage 1
+  packs. The matrix previously always used `copy`. `link` is safe for it: the
+  matrix is already gzipped and never re-compressed, so nothing breaks the hard
+  link, and it avoids duplicating one of the largest outputs of a big run. A hard
+  link survives `--cleanup`. Use `copy` for a fully independent archival copy.
+
+### Changed
+
+- Renamed **`--publish_mode` → `--kmer_count_publish_mode`** so the two publish
+  modes name their stages unambiguously. `--publish_mode` is kept as a
+  **deprecated alias** (a launch warning notes the rename); it will be removed in
+  a future release.
+- The same-filesystem launch check for `link` now covers either publish mode.
+- Documentation-only comment cleanup across the source and modules: removed
+  internal changelog/task references and stale magic numbers, so comments
+  describe the current behaviour rather than its development history.
+
 ## v3.7.3
 
 Overhauls the two helper tools and adds optional pack compression. No matrix

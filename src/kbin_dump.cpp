@@ -69,7 +69,8 @@ static void usage(std::ostream& o, const char* prog) {
       << "\n"
       << "  Reads a .kbin pack (kmer_count's Stage 1 output) using its self-describing\n"
       << "  footer, so one binary reads a pack of any k. With no option it writes every\n"
-      << "  k-mer as '<kmer><TAB><count>' to stdout.\n"
+      << "  k-mer as '<kmer><TAB><count>' to stdout. The pack must be UNCOMPRESSED (it is\n"
+      << "  seeked by the footer index); decompress a .kbin.gz first with 'pigz -dc'.\n"
       << "\n"
       << "    --info          print a header summary (k, bins, record width, totals) and exit\n"
       << "    --bin N         dump only bin N to stdout\n"
@@ -125,6 +126,24 @@ int main(int argc, char** argv) {
 
     std::ifstream in(path, std::ios::binary);
     if (!in) die("cannot open " + path);
+
+    // A pack is read by seeking to its footer index, so it must be the raw,
+    // uncompressed .kbin. If the pipeline compressed the pack (--compress_kbin_packs
+    // leaves a .kbin.gz), tell the user to decompress it first rather than failing
+    // later with a cryptic "bad magic". Detect gzip by its two-byte magic (1f 8b).
+    unsigned char m[2] = {0, 0};
+    in.read(reinterpret_cast<char*>(m), 2);
+    if (in.gcount() == 2 && m[0] == 0x1f && m[1] == 0x8b) {
+        std::string out = path;
+        if (out.size() > 3 && out.compare(out.size() - 3, 3, ".gz") == 0)
+            out.resize(out.size() - 3);
+        else
+            out += ".kbin";
+        die(path + " is gzip-compressed. kbin_dump needs the uncompressed pack "
+            "(it seeks by the footer index). Decompress it first, e.g.:\n"
+            "    pigz -dc " + path + " > " + out);
+    }
+    in.clear();   // reset EOF/fail flags from the 2-byte probe before seeking
 
     in.seekg(0, std::ios::end);
     long long size = in.tellg();

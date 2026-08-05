@@ -4,10 +4,6 @@
 # -march=native for the actual compute node), so this Makefile exists for local
 # development and testing. It mirrors the flags the modules use.
 #
-# Replaces a CMakeLists.txt that referenced sources which only existed under
-# archive/ and so could not configure, and a compile.sh with hardcoded
-# site-specific /ibex paths.
-#
 #   make                 # build both at the default k
 #   make KMER_K=31       # build for 31-mers (k <= 32 uses the compact 10-byte record)
 #   make test            # build, then run a tiny end-to-end sanity check

@@ -10,7 +10,7 @@
 // small count column. It rewrites <accession>.kbin -> <accession>.kbin.gz in the PUBLISHED pack
 // directory (output_dir/kmer_count_k<k>/), in place with pigz. Note this cannot
 // preserve a hard link: pigz writes a new .gz and removes the .kbin, so if the
-// uncompressed pack is also hard-linked in the work dir (publish_mode 'link' with
+// uncompressed pack is also hard-linked in the work dir (kmer_count_publish_mode 'link' with
 // cleanup=false) the data is not freed until the work dir is removed. main.nf
 // warns about that at launch. The read path (Stage 2, kbin_dump) always expects
 // uncompressed packs, so re-running Stage 2 means decompressing first.

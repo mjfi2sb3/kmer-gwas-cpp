@@ -17,16 +17,13 @@
 //  1. MEMORY IS BOUNDED, NOT DATA-PROPORTIONAL.
 //     Reads are streamed and discarded batch by batch; k-mer accumulation is
 //     capped by a budget and spills to one temporary file if exceeded. Peak
-//     memory therefore does not scale with genome size or sequencing depth.
-//     Previously the program held roughly three copies of every read and
-//     accumulated k-mers without any cap, so peak memory tracked input size
-//     directly rather than being something you could set. Tasks #4 and #17.
+//     memory therefore does not scale with genome size or sequencing depth — it
+//     is a figure you set, not one the input dictates.
 //
 //  2. INODES ARE O(1) PER ACCESSION.
-//     One pack file, plus one spill file only if the budget was exceeded.
-//     Previously: 1 + num_bins directories + 2 x num_bins files, measured at
-//     4,502 peak inodes for 1500 bins versus 2 now. That coupling is why bin
-//     count could not be raised for large genomes without an inode explosion.
+//     One pack file, plus one spill file only if the budget was exceeded. This
+//     decoupling from num_bins is what lets the bin count be raised for large
+//     genomes without an inode explosion.
 // ===========================================================================
 
 #include "thread_pool.hpp"
@@ -51,8 +48,8 @@
 #include "pack_io.hpp"
 #include "bin_store.hpp"
 // Gzip decompression. zlib-ng's inflate is ~3x faster than stock zlib on FASTQ
-// (measured 23.2 s -> 7.4 s per rice mate) and is API-shaped the same, so it is
-// used when available (-DHAVE_ZLIBNG) and stock zlib is the portable fallback so
+// (measured ~23 s -> ~7 s for a multi-GB mate) and is API-shaped the same, so it
+// is used when available (-DHAVE_ZLIBNG); stock zlib is the portable fallback so
 // the non-container profiles still build on clusters without it.
 #ifdef HAVE_ZLIBNG
   #define WITH_GZFILEOP           // exposes zlib-ng's gz* file ops in the header
@@ -73,9 +70,7 @@
 
 using namespace std;
 
-// Report a fatal I/O error and exit. Previously lived in mmap_io.cpp, which was
-// otherwise entirely dead code (its get_reads/read_vector/write_vector were
-// unused by both programs).
+// Report a fatal I/O error and exit.
 static void handle_error(const string &msg)
 {
    perror(msg.c_str());
@@ -104,8 +99,8 @@ using Key = kmer::Key;
 // 150 bp that is ~98 MB per in-flight task. 16384 keeps the worst case bounded
 // while capturing most of the speed-up.
 //
-// Task #17 replaces this heuristic with a real global memory budget, which is
-// the correct fix; until then this constant is the safety margin.
+// This constant is a fixed safety margin on the read-batch working set; the
+// k-mer accumulation itself is bounded separately by the memory budget below.
 static const size_t BATCH_READS = 16384;
 
 // Default k-mer accumulation budget, overridable as the 6th argument. Peak
@@ -116,13 +111,12 @@ static const double DEFAULT_BUDGET_GB = 32.0;
 // Default minimum per-accession count for a k-mer to be kept, overridable as
 // the 7th argument.
 //
-// The previous code hardcoded "drop count == 1", i.e. this value fixed at 2. At
-// typical sequencing depth, count-2 and count-3 k-mers are still overwhelmingly
-// sequencing errors, and this method family normally filters at 2-5. Raising it
-// compounds through everything downstream: Stage 1 output size, Stage 2 read
-// volume, matrix_merge peak memory, and the union row count of the matrix.
-//
-// It is left at 2 by default so behaviour is unchanged unless asked for.
+// A value of 2 drops singletons (count == 1). At typical sequencing depth,
+// count-2 and count-3 k-mers are still overwhelmingly sequencing errors, and
+// this method family normally filters at 2-5. Raising it compounds through
+// everything downstream: Stage 1 output size, Stage 2 read volume, matrix_merge
+// peak memory, and the union row count of the matrix — so the conservative 2 is
+// the default.
 static const kmer::Count DEFAULT_MIN_COUNT = 2;
 
 struct membuf : streambuf
@@ -242,8 +236,8 @@ private:
    }
 
    // FASTA: a header line starting with '>' followed by one or more sequence
-   // lines, which must be concatenated. Previously this format was detected and
-   // then parsed with the FASTQ rule, silently yielding garbage.
+   // lines, which must be concatenated (the FASTQ rule does not apply, since a
+   // record spans a variable number of lines).
    bool next_fasta(vector<string> &out, size_t max_reads)
    {
       string line;
@@ -316,9 +310,8 @@ private:
 // kmers_obj — counts the k-mers of one batch of reads and hands them to the
 // BinStore.
 //
-// The batch is MOVED in, not copied. It previously took `vector<string>&` but
-// stored a by-value member, silently duplicating every read once per in-flight
-// task — one of three redundant copies since removed.
+// The batch is MOVED in, not copied, so a batch of reads is never duplicated
+// per in-flight task.
 // ---------------------------------------------------------------------------
 class kmers_obj
 {
@@ -333,18 +326,14 @@ public:
       // Rolling canonical encode: the forward and reverse-complement keys are
       // updated in O(1) per base instead of re-encoding each overlapping k-mer.
       //
-      // Windows containing a non-ACGT base are SKIPPED, not counted.
-      //
-      // They used to be folded into the all-zero key (canonical() returned ""
-      // and bit_encode("") gave 0) and discarded later. That silently destroyed
-      // a real k-mer: A encodes as 00, so the genuine 51-mer AAAA...A is also
-      // all-zero and was indistinguishable from the "invalid" marker. Poly-A is
-      // its own canonical form (its reverse complement TTT...T sorts higher), so
-      // it could not escape by canonicalising to something else — it was simply
-      // lost, without warning, wherever a poly-A tract occurred. Task #6.
-      //
-      // Skipping is also less work: a read with one N no longer counts all k
-      // spanning windows into a bucket that is thrown away.
+      // Windows containing a non-ACGT base are SKIPPED, not counted. They must
+      // not be folded into the all-zero key: A encodes as 00, so a genuine
+      // poly-A k-mer (AAAA...A) is itself all-zero, and poly-A is its own
+      // canonical form (its reverse complement TTT...T sorts higher), so it
+      // cannot canonicalise to anything else. Using the all-zero key as an
+      // "invalid" marker would therefore silently destroy every poly-A k-mer.
+      // Skipping is also less work: a read with one N does not count all the
+      // windows spanning it into a bucket that is then thrown away.
       const uint8_t *T = kmer::base_table();
       for (auto &seq : chunk)
       {
@@ -365,9 +354,8 @@ public:
 
       // Hand the batch's counts to the store, grouped by bin.
       //
-      // Sorting by bin first means ONE lock acquisition per (batch, bin) instead
-      // of one per record. The previous code took a mutex for every single entry
-      // and did an ofstream write while holding it.
+      // Sorting by bin first means ONE lock acquisition per (batch, bin) rather
+      // than one per record, so the store's per-bin lock is contended far less.
       staging_.clear();
       staging_.reserve(kmers_.size());
       for (auto &pair_ : kmers_)
@@ -493,8 +481,8 @@ int main(int argc, char *argv[])
       const string pack_path  = output_path + accession + ".kbin";
       const string spill_path = output_path + accession + ".spill";
 
-      // Bounded-memory accumulator. Replaces the 1 + B dirs + 2B files scheme
-      // and the separate dedup pass entirely.
+      // Bounded-memory accumulator: counts and deduplicates in memory, spilling
+      // to a single file only when the budget is exceeded (see bin_store.hpp).
       kmer::BinStore store(NUM_FILES, (size_t)(budget_gb * 1e9), spill_path);
 
       thread_pool pool;

@@ -232,14 +232,13 @@ private:
 //
 // MEMORY: O(number of accessions), NOT O(union k-mers x accessions).
 //
-// An earlier implementation loaded the whole bin into
-// `unordered_map<Key, vector<Count>>`, needing union_rows x (N+1) x 2 bytes:
-// two bytes of count per accession for every distinct k-mer in the bin. At tens
-// of thousands of accessions a single bin's union is gigabytes, which is why
-// num_bins used to grow with genome size, and num_bins is still what drives the
-// inode count.
+// Holding a whole bin in an `unordered_map<Key, vector<Count>>` would need
+// union_rows x (N+1) x 2 bytes — two bytes of count per accession for every
+// distinct k-mer in the bin — which at tens of thousands of accessions makes a
+// single bin's union gigabytes. num_bins is what keeps each bin small (and is
+// what drives the inode count).
 //
-// Because Stage 1 emits each bin slice SORTED, the same result comes from a
+// Because Stage 1 emits each bin slice SORTED, the result comes instead from a
 // streaming k-way merge: advance one cursor per accession through a heap, pop
 // the smallest key, gather the counts from every accession holding it, emit the
 // row. The only resident state is a read buffer per accession (in each active
@@ -602,9 +601,9 @@ int main(int argc, char *argv[])
 				}
 				else if (string(optarg) == "bits")
 				{
-				    // 'bits' is an ENCODING, not a delimiter (it was under
-				    // --delimiter in v3.0.0; that was a naming error). Reject it
-				    // here so the mistake is caught rather than silently ignored.
+				    // 'bits' is an ENCODING, not a delimiter — a common mix-up.
+				    // Reject it here so the mistake is caught rather than
+				    // silently ignored.
 				    cerr << "Error: 'bits' is not a delimiter — it is an output "
 				            "encoding. Use --encoding bits (with --delimiter for "
 				            "the text encoding only)." << endl;
@@ -699,14 +698,9 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    // Check if all required options are provided.
-    // --index must be included: it was previously read from an uninitialised
-    // variable when omitted, silently merging an arbitrary bin.
+    // Check if all required options are provided. --index is required: without
+    // an explicit bin index there is no sensible default to merge.
     if (input_path.empty() || accessions_path.empty() || !have_index)
-    /*{
-        cout << "usage: " << argv[0] << " --input <input path> --accessions <accessions path> --index <file index> --threshold <min occurence threshold>\n";
-        return -1;
-    }*/
     {
 		cout << "\nusage: " << argv[0] << "\n"
 		     << "\t\t--input <input path> \n"

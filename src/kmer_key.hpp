@@ -58,9 +58,9 @@ static constexpr bool SINGLE_WORD = (BITS <= 64);
 // ---------------------------------------------------------------------------
 // Per-accession k-mer counts.
 //
-// 16 bits. Accumulation SATURATES at 65535 instead of wrapping — the previous
-// behaviour silently wrapped, so a k-mer occurring 65,536 times was recorded as
-// occurring 0 times and then dropped entirely by the singleton filter.
+// 16 bits. Accumulation SATURATES at 65535 rather than wrapping: a wrapped
+// count would record a k-mer occurring 65,536 times as occurring 0 times, and
+// the singleton filter would then drop it entirely.
 //
 // Saturating rather than widening is deliberate: counts that high come
 // from repeats, organellar sequence or contamination, where an exact figure

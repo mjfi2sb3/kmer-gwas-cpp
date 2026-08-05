@@ -83,14 +83,20 @@ def helpMessage() {
         --cleanup                Delete the work dir on successful completion        [default: false]
                                  Default false keeps it so -resume can skip finished work;
                                  set --cleanup true to delete on success (disables -resume).
-        --publish_mode           How Stage 1 packs reach output_dir:                [default: link]
+        --kmer_count_publish_mode  How Stage 1 packs reach output_dir:               [default: link]
                                  link (hardlink; enables -resume, same filesystem), copy (~2x storage),
-                                 or move (lowest footprint, no -resume).
+                                 or move (lowest footprint, no -resume). (--publish_mode is a
+                                 deprecated alias.)
+        --matrix_publish_mode    How the Stage 2 matrix reaches output_dir:          [default: link]
+                                 same choices as --kmer_count_publish_mode. link is safe here (the
+                                 matrix is already gzipped, never re-compressed) and
+                                 avoids copying a large result; use copy for an
+                                 independent archival copy.
         --compress_kbin_packs    gzip the published .kbin packs after BOTH stages     [default: ${params.compress_kbin_packs}]
                                  finish (modest, ~1.5-2x: the packed keys barely
                                  compress; the gain varies with k and coverage). Runs
                                  only on full success; re-running Stage 2 then needs
-                                 them decompressed first. With publish_mode link +
+                                 them decompressed first. With kmer_count_publish_mode link +
                                  cleanup false it saves nothing until work is removed.
 
     Profiles:
@@ -115,6 +121,11 @@ if (params.core != null) {
     log.warn "--core is deprecated and was renamed to --write_core_kmers; " +
              "honouring it as --write_core_kmers ${params.write_core_kmers}. " +
              "Please switch, as --core will be removed in a future release."
+}
+if (params.publish_mode != null) {
+    log.warn "--publish_mode is deprecated and was renamed to --kmer_count_publish_mode; " +
+             "honouring it as --kmer_count_publish_mode ${params.kmer_count_publish_mode}. " +
+             "Please switch, as --publish_mode will be removed in a future release."
 }
 
 
@@ -175,7 +186,8 @@ def paramSummary(String accessions_file, String data_dir) {
         row('max_memory/cpus/time',  "${params.max_memory} / ${params.max_cpus} / ${params.max_time}"),
         row('singularity_cache_dir', params.singularity_cache_dir),
         head('Work directory and publishing'),
-        row('publish_mode',      params.publish_mode),
+        row('kmer_count_publish_mode', params.kmer_count_publish_mode),
+        row('matrix_publish_mode', params.matrix_publish_mode),
         row('cleanup',           params.cleanup),
         row('compress_kbin_packs', params.compress_kbin_packs),
         "    ${c_banner}-----------------------------------------${c_reset}",
@@ -290,10 +302,12 @@ workflow {
     // Validate the publish mode, and for 'link' fail here if output_dir and the
     // work dir are on different filesystems. A hard link cannot cross filesystems,
     // so Nextflow would otherwise fail the FIRST pack publish mid-run with a
-    // cryptic error; this stops at launch with the fix (use --publish_mode copy).
-    if (!(params.publish_mode in ['link', 'copy', 'move']))
-        exit 1, "ERROR: --publish_mode must be 'link', 'copy' or 'move' (got '${params.publish_mode}')."
-    if (params.publish_mode == 'link') {
+    // cryptic error; this stops at launch with the fix (use copy).
+    if (!(params.kmer_count_publish_mode in ['link', 'copy', 'move']))
+        exit 1, "ERROR: --kmer_count_publish_mode must be 'link', 'copy' or 'move' (got '${params.kmer_count_publish_mode}')."
+    if (!(params.matrix_publish_mode in ['link', 'copy', 'move']))
+        exit 1, "ERROR: --matrix_publish_mode must be 'link', 'copy' or 'move' (got '${params.matrix_publish_mode}')."
+    if (params.kmer_count_publish_mode == 'link' || params.matrix_publish_mode == 'link') {
         def outDev = null, workDev = null
         try {
             def devOf = { p ->
@@ -305,19 +319,20 @@ workflow {
             workDev = devOf(workflow.workDir)
         } catch (Exception e) { /* cannot determine filesystems; let Nextflow surface any link error */ }
         if (outDev != null && workDev != null && outDev != workDev)
-            exit 1, "ERROR: --publish_mode 'link' needs --output_dir and the work dir on the same filesystem, " +
+            exit 1, "ERROR: 'link' publish mode needs --output_dir and the work dir on the same filesystem, " +
                     "but they are on different ones (output_dir=${params.output_dir}, work=${workflow.workDir}). " +
-                    "Use --publish_mode copy, or point --output_dir at the same filesystem as the work dir."
+                    "Set the offending mode (--kmer_count_publish_mode / --matrix_publish_mode) to copy, " +
+                    "or point --output_dir at the same filesystem as the work dir."
     }
 
     // --compress_kbin_packs only reclaims space if the uncompressed packs are
-    // actually gone. With publish_mode 'link' + cleanup=false the pack survives as
+    // actually gone. With kmer_count_publish_mode 'link' + cleanup=false the pack survives as
     // a hard link in the work dir, so compressing the published copy only ADDS the
     // .gz until the work dir is removed. Warn rather than fail (option (a)).
-    if (params.compress_kbin_packs && params.publish_mode == 'link' && !params.cleanup)
-        log.warn "--compress_kbin_packs is on, but with --publish_mode link and --cleanup false " +
+    if (params.compress_kbin_packs && params.kmer_count_publish_mode == 'link' && !params.cleanup)
+        log.warn "--compress_kbin_packs is on, but with --kmer_count_publish_mode link and --cleanup false " +
                  "the uncompressed packs remain hard-linked in the work dir, so no space is " +
-                 "reclaimed until it is removed. Use --cleanup true (or --publish_mode move)."
+                 "reclaimed until it is removed. Use --cleanup true (or --kmer_count_publish_mode move)."
 
     // Resolve to absolute paths — relative inputs break inside Singularity
     // containers and SLURM work directories

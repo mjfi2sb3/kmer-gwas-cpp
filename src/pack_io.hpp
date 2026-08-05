@@ -23,11 +23,10 @@
 //  Reading bin i is: read the 24-byte tail, seek to off[i], read
 //  off[i+1]-off[i] bytes. No scan, no extraction, no temporary files.
 //
-//  This replaces the per-accession tar plus the `extracted/<acc>/<bin>_nr.bin`
-//  fan-out, which cost 25,201 inodes per MATRIX_MERGE task (~5M concurrent at
-//  queueSize 200). Note the motivation is inodes and metadata operations, NOT
-//  read volume: GNU tar seeks over member payloads rather than scanning, so the
-//  tar itself only cost ~1.3x in bandwidth.
+//  One pack file per accession holds every bin, so Stage 2 reads one file per
+//  accession and seeks within it, rather than materialising a separate file per
+//  (accession, bin) pair. The cost that matters here is inodes and metadata
+//  operations, not read volume.
 //
 //  HARD CONTRACT: records within each bin slice are SORTED by key and
 //  deduplicated. Stage 2's k-way merge depends on it; validate_pack() checks it.

@@ -5,13 +5,10 @@
 //  BinStore — bounded-memory k-mer accumulation for Stage 1.
 // ===========================================================================
 //
-//  Replaces the old scheme, which for every accession created
-//      1 dir + num_bins dirs + 2 x num_bins files   (4,501 inodes at 1500 bins)
-//  wrote every hash-map entry into `bin_i/keys.dat` + `bin_i/values.dat`, and
-//  then re-read the lot in a second pass to deduplicate. Because the counting
-//  chunks were small, a k-mer seen 30x was written to disk 30 times: measured
-//  0.13 TB written + 0.13 TB read back per rice accession, 5.8 TB + 5.8 TB for
-//  wheat.
+//  Accumulation stays in memory and deduplicates before spilling, so a k-mer
+//  seen many times is not written to disk once per occurrence. Only bins that
+//  exceed their memory share ever touch disk, which keeps both the write volume
+//  and the inode count low even for large, high-coverage genomes.
 //
 //  HOW IT WORKS
 //
@@ -33,7 +30,7 @@
 //  the property this class exists to provide.
 //
 //  Inodes per accession: 1 pack (+1 spill file, only if spilling happened),
-//  down from 4,501.
+//  independent of the bin count.
 //
 //  WHY SORTING RATHER THAN A HASH MAP: measured at 16.3-16.9 M k-mer/s for
 //  per-bin partition+sort+compact versus 9.3-10.1 M/s for unordered_map
@@ -142,10 +139,9 @@ public:
         // Drop k-mers below the error threshold. Filtered in place.
         //
         // Note there is deliberately NO is_zero() check here. The all-zero key
-        // is a legitimate k-mer (poly-A: A encodes as 00), and filtering it out
-        // was silently discarding it. Invalid windows are now skipped at
-        // counting time rather than being funnelled into the zero key, so
-        // nothing spurious reaches this point.
+        // is a legitimate k-mer (poly-A: A encodes as 00), so dropping it would
+        // discard real data. Invalid windows are skipped at counting time rather
+        // than funnelled into the zero key, so nothing spurious reaches here.
         size_t w = 0;
         for (size_t i = 0; i < b.buf.size(); i++)
             if (b.buf[i].count >= min_count)

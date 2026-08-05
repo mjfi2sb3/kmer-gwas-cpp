@@ -1,11 +1,10 @@
 // Stage 1 — count one accession's k-mers into a single self-indexed pack file.
 //
-// Emits `<accession>.kbin`, replacing the previous per-bin directory tree plus
-// tar archive. Inode cost per task went from 1 + num_bins dirs + 2 x num_bins
-// files (measured 4,502 peak at 1500 bins) to one file.
+// Emits a single `<accession>.kbin` pack holding every bin, so the inode cost
+// per task is one file regardless of num_bins.
 //
 // The pack can be large (often several GB per accession), so the publish mode is
-// a real trade-off, exposed as --publish_mode (see nextflow.config):
+// a real trade-off, exposed as --kmer_count_publish_mode (see nextflow.config):
 //   'link' (default) — a hard link: no second copy of the data, and the pack
 //     stays in the work dir so -resume can skip finished accessions. Needs
 //     output_dir and the work dir on one filesystem (main.nf checks this).
@@ -21,7 +20,7 @@ process KMER_COUNT {
     // k is in the directory name so bin files from different k-mer lengths can
     // never be mixed: they store fixed-width k-mers and are unreadable at any
     // other k. MATRIX_MERGE reads this same path (see main.nf kmer_count_root).
-    publishDir "${params.output_dir}/kmer_count_k${params.kmer_size}", mode: params.publish_mode, overwrite: true
+    publishDir "${params.output_dir}/kmer_count_k${params.kmer_size}", mode: params.kmer_count_publish_mode, overwrite: true
 
     input:
         val accession
