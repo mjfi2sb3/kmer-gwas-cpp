@@ -33,7 +33,7 @@ def helpMessage() {
                                  Keeps k-mers in [threshold, n_acc - threshold] accessions.
                                  Filters on HOW MANY ACCESSIONS carry the k-mer, not on
                                  its count within an accession. 0 disables the filter.
-        --count                  'y' = counts, 'n' = presence/absence               [default: ${params.count}]
+        --keep_kmer_counts       'y' = keep actual kmer counts, 'n' = presence/absence               [default: ${params.count}]
         --delimiter              Value separator (text encoding): 'tab','space','none' [default: ${params.delimiter}]
                                  'none' concatenates and is presence/absence only.
         --encoding               Matrix encoding: 'text' or 'bits'                  [default: ${params.encoding}]
@@ -166,7 +166,7 @@ def paramSummary(String accessions_file, String data_dir) {
         row('num_bins',       params.num_bins),
         row('min_kmer_count', params.min_kmer_count),
         row('threshold',      params.threshold),
-        row('count',          params.count),
+        row('keep kmer counts',          params.count),
         row('delimiter',      params.delimiter),
         row('encoding',       params.encoding),
         row('write_core_kmers', params.write_core_kmers),
@@ -221,7 +221,7 @@ def writeManifest(String accessions_file, String data_dir, int n_accessions) {
         num_bins            = ${params.num_bins}
         min_kmer_count      = ${params.min_kmer_count}
         threshold           = ${params.threshold}
-        count               = ${params.count}
+        keep_kmer_counts    = ${params.count}
         delimiter           = ${params.delimiter}
         encoding            = ${params.encoding}
         write_core_kmers    = ${params.write_core_kmers}
