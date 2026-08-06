@@ -294,7 +294,7 @@ nextflow run main.nf \
 The container image is published at:
 
 ```text
-ghcr.io/mjfi2sb3/kmer-gwas-cpp:v3.7.4
+ghcr.io/mjfi2sb3/kmer-gwas-cpp:v3.7.5 # check for correct version
 ```
 
 It supplies GCC 12, zlib, and pigz as a build toolchain. The source in the checkout is compiled inside the container at job start with `-march=native`.
