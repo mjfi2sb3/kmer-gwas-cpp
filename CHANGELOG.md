@@ -4,6 +4,51 @@ All notable changes to this pipeline are documented here.
 Versions follow [semantic versioning](https://semver.org): the major number is
 bumped when output or interfaces change in a backwards-incompatible way.
 
+## v4.0.0
+
+Adds a second Stage 1 input, existing KMC databases, and records metadata in each
+pack. Reads-mode matrices are byte-identical to v3.7.5.
+
+### Breaking changes
+
+- **Pack format version 2.** Each `.kbin` pack now stores a metadata block
+  (accession, input mode, min_kmer_count and its source, versions, statistics).
+  v3.x `matrix_merge` and `kbin_dump` do not read version 2 packs. v4.0.0 reads
+  version 1 and version 2 packs, so Stage 2 can still use packs from a v3.x run.
+- **`--kmer_size` has no default** (it was 51). It is required in reads mode. In
+  kmc mode it is read from the databases; if given, it must match them.
+- **Stage 2 checks pack identity.** It stops if a pack records a different
+  accession than its place in the accessions file. Use `--skip_accession_check`
+  if the packs were renamed on purpose. Version 1 packs have no record and are
+  not checked.
+- A `-resume` of a v3.x run re-runs both stages.
+
+### Added
+
+- **`--input_mode kmc`**: converts one KMC database per accession
+  (`<accession>.kmc_pre` + `.kmc_suf`, KMC1 or KMC2 format) to a pack with the new
+  `kmc_to_pack`, which includes the KMC 3.2.4 API (GNU GPL 3). KMC does not need
+  to be installed. `--kmc_dir` sets the database directory (default: `data_dir`).
+  Each database is kept as it is: its own `-ci` is the count filter, and
+  `--min_kmer_count` is applied only where it is larger.
+- **`kmc_databases.tsv`**: the header settings of each database (k, -ci, -cx,
+  counter size, format, distinct_kmers). Databases built with different settings
+  stop the run unless you use `--kmc_allow_mixed`.
+- **`pack_stats.tsv`**: one row per accession, in accessions-file order, with the
+  same 22 columns in both modes (input reads and bases, distinct k-mers before and
+  after the filter, count_limit, kmers_at_count_limit, estimated k-mer coverage,
+  smallest and largest bin).
+- **`kbin_dump --info`**: prints the pack summary and its metadata.
+- **`matrix_merge --check_accession y|n`** (pipeline flag:
+  `--skip_accession_check`).
+- **`run_manifest.txt`** records status, git describe, a checksum of the
+  pipeline code, the project, launch and work directories, the profile and the
+  container, and adds a `# Completion` section (status, duration, CPU hours,
+  task count, error) when the run ends.
+- `tools/test_kmc_to_pack.sh` (reproducible converter test against the reads
+  path) and `tools/check_kmc_db.sh` (checks a conversion of your own database).
+- **Licence**: MIT for the pipeline; `kmc_to_pack` and `src/kmc_api/` are GNU GPL 3.
+
 ## v3.7.5
 
 Fixes `-resume` for Stage 2, and renames the count flag. No output change.
