@@ -1,0 +1,23 @@
+KMC C++ API
+===========
+
+These files are the KMC database API, copied without modification from the
+KMC project:
+
+  Upstream : https://github.com/refresh-bio/KMC
+  Release  : v3.2.4 (2024-02-09)
+  Commit   : d6c24dc88010508336d824bbffbf1ef3f49fddf8
+  Directory: kmc_api/
+  Authors  : Sebastian Deorowicz, Agnieszka Debudaj-Grabysz, Marek Kokot
+  Licence  : GNU GPL 3
+
+Only src/kmc_to_pack.cpp uses these files. Because it links them, the
+kmc_to_pack binary is distributed under the GNU GPL 3. No other program in this
+pipeline links KMC.
+
+The API reads KMC databases in the KMC1 format (version 0) and the KMC2 format
+(version 0x200). KMC 2 and KMC 3 write the KMC2 format by default.
+
+To update, replace the files in this directory with the kmc_api/ files of a new
+KMC release, then update the release and commit above and run
+tools/test_kmc_to_pack.sh.
