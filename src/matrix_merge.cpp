@@ -251,7 +251,8 @@ private:
 // ===========================================================================
 void merge_chunk(const uint file_index, const uint min_occur, string input_path,
                  string accessions_path, string delimiter, bool show_count,
-                 string ouput_dir, bool write_core, bool bit_packed, uint num_threads = 1)
+                 string ouput_dir, bool write_core, bool bit_packed, uint num_threads = 1,
+                 bool check_accession = true)
 {
     auto accessions = get_accessions(accessions_path);
     size_t NUM_ACC = accessions.size();
@@ -296,6 +297,16 @@ void merge_chunk(const uint file_index, const uint min_occur, string input_path,
     vector<Acc> acc(NUM_ACC);
     for (size_t i = 0; i < NUM_ACC; i++) {
         kmer::PackReader r(paths[i]);
+        // A version 2 pack records the accession it was made for. A mismatch
+        // means the file was renamed or copied by mistake, which would put the
+        // wrong data under this accession's column.
+        if (check_accession) {
+            const string recorded = r.metadata().get("accession");
+            if (!recorded.empty() && recorded != accessions[i])
+                throw runtime_error(paths[i] + " contains accession " + recorded + ", not "
+                                    + accessions[i] + ". Check the pack files, or use "
+                                    "--check_accession n if the accessions were renamed on purpose.");
+        }
         acc[i].off  = r.bin_offset(file_index);
         acc[i].nrec = r.bin_records(file_index);
         acc[i].fd   = ::open(paths[i].c_str(), O_RDONLY);
@@ -535,6 +546,7 @@ int main(int argc, char *argv[])
 	bool show_count = false;  // Default is to show presence/absence
 	bool write_core = false;  // Default is to skip core k-mers file
 	bool bit_packed = false;  // --encoding bits: 1 bit per accession (else text)
+	bool check_accession = true;  // compare each pack's recorded accession with the list
 	uint num_bins = 0;
 	uint available_threads;
 	if (const char* s = getenv("SLURM_CPUS_PER_TASK")) {
@@ -557,12 +569,13 @@ int main(int argc, char *argv[])
 		{"core",     required_argument, 0, 'r'},
 		{"bins",     required_argument, 0, 'b'},
 		{"threads",  required_argument, 0, 'T'},
+		{"check_accession", required_argument, 0, 'A'},
 		{0, 0, 0, 0}
 	};
     int option_index = 0;
     int c;
 
-    while ((c = getopt_long(argc, argv, "i:a:f:t:d:e:c:r:b:T:", long_options, &option_index)) != -1)
+    while ((c = getopt_long(argc, argv, "i:a:f:t:d:e:c:r:b:T:A:", long_options, &option_index)) != -1)
     {
         switch (c) 
         {
@@ -663,6 +676,16 @@ int main(int argc, char *argv[])
             case 'T':
                 num_threads = stoi(optarg);
                 break;
+            case 'A':
+				if (string(optarg) == "y")
+				    check_accession = true;
+				else if (string(optarg) == "n")
+				    check_accession = false;
+				else {
+				    cerr << "Invalid check_accession option. Use 'y' or 'n'." << endl;
+				    return -1;
+				}
+				break;
             default:
                 abort();
         }
@@ -725,6 +748,8 @@ int main(int argc, char *argv[])
 		     << "\t\t--threads <parallel merge threads> (default: SLURM_CPUS_PER_TASK if set, else hardware concurrency)\n"
 		     << "\t\t            The bin's key space is split into contiguous shards merged in\n"
 		     << "\t\t            parallel; output is byte-identical to a single-threaded run.\n"
+		     << "\t\t--check_accession <y|n> (default: y)\n"
+		     << "\t\t            Stop if a pack records a different accession than its file name.\n"
 		     << "\n"
 		     << "\tHow --encoding, --delimiter and --count combine:\n"
 		     << "\n"
@@ -786,7 +811,7 @@ int main(int argc, char *argv[])
         
         auto start = chrono::steady_clock::now();
 
-        merge_chunk(file_index, min_occur, input_path, accessions_path, delimiter, show_count, ouput_dir, write_core, bit_packed, num_threads);
+        merge_chunk(file_index, min_occur, input_path, accessions_path, delimiter, show_count, ouput_dir, write_core, bit_packed, num_threads, check_accession);
 
         auto end = chrono::steady_clock::now();
         cout << "processing index: " << file_index << " took "

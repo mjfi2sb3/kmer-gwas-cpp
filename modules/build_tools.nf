@@ -5,12 +5,9 @@
 //   bits_to_text — convert the bit-packed matrix to and from text.
 //   kbin_dump    — inspect a Stage 1 .kbin pack or export its k-mers as text.
 //
-// Unlike the per-job kmer_count/matrix_merge binaries (built with -march=native
-// for the compute node), these are built WITHOUT -march=native: they are utilities
-// the user may run anywhere — a login node, a laptop — so portability across CPUs
-// matters more than the speed-up. kbin_dump reads a pack's k from its footer, so
-// one binary reads a pack of any k; its --all_bins export is multi-threaded (and
-// links zlib for in-process gzip), hence the -pthread and -lz.
+// These utilities are built without -march=native for portability, as they may
+// be run on login nodes or laptops. kbin_dump reads a pack's k from its footer,
+// so one binary can read packs of any k.
 process BUILD_TOOLS {
     publishDir "${params.output_dir}/bin", mode: 'copy', overwrite: true
 

@@ -9,7 +9,9 @@ run them without compiling; the same binaries are attached to each release):
 - **`kbin_dump`** — inspect or export a Stage 1 `.kbin` pack: the whole pack to
   stdout, or `--all_bins DIR` to write one file per bin under `DIR/<accession>/`,
   decoded in parallel and gzipped in-process. Reads `k` from the pack's footer,
-  so one binary reads a pack of any k.
+  so one binary reads a pack of any k. `--info` prints the pack summary and, for
+  a version 2 pack, its metadata (accession, input_mode, min_kmer_count,
+  versions and statistics).
 - **`bits_to_text`** — convert the bit-packed matrix to and from text.
 
 Usage for both is documented in the top-level [README](../README.md). Being

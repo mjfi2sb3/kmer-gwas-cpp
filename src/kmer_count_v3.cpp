@@ -313,6 +313,14 @@ private:
 // The batch is MOVED in, not copied, so a batch of reads is never duplicated
 // per in-flight task.
 // ---------------------------------------------------------------------------
+// Input totals for the pack metadata, summed over all batches.
+struct InputStats
+{
+   atomic<uint64_t> bases{0};
+   atomic<uint64_t> windows{0};   // k-mer windows in the reads
+   atomic<uint64_t> counted{0};   // windows counted (no non-ACGT base)
+};
+
 class kmers_obj
 {
 public:
@@ -321,7 +329,7 @@ public:
 
    explicit kmers_obj(vector<string> &&batch) : chunk(std::move(batch)) {}
 
-   void index(kmer::BinStore &store, size_t num_files)
+   void index(kmer::BinStore &store, size_t num_files, InputStats &stats)
    {
       // Rolling canonical encode: the forward and reverse-complement keys are
       // updated in O(1) per base instead of re-encoding each overlapping k-mer.
@@ -335,9 +343,12 @@ public:
       // Skipping is also less work: a read with one N does not count all the
       // windows spanning it into a bucket that is then thrown away.
       const uint8_t *T = kmer::base_table();
+      uint64_t bases = 0, windows = 0, counted = 0;
       for (auto &seq : chunk)
       {
+         bases += seq.size();
          if (seq.size() < (size_t)k) continue;
+         windows += seq.size() - (size_t)k + 1;
          Key f, r;
          int valid = 0;
          for (size_t i = 0; i < seq.size(); i++)
@@ -348,9 +359,15 @@ public:
             if (valid < k) valid++;
 
             if (i + 1 >= (size_t)k && valid >= k)    // a fully-valid window ends here
+            {
                kmer::sat_inc(kmers_[(r < f) ? r : f]);
+               counted++;
+            }
          }
       }
+      stats.bases   += bases;
+      stats.windows += windows;
+      stats.counted += counted;
 
       // Hand the batch's counts to the store, grouped by bin.
       //
@@ -396,10 +413,10 @@ vector<string> split(const string &str, const char &sep)
 
 int main(int argc, char *argv[])
 {
-   if (argc < 6 || argc > 9)
+   if (argc < 6 || argc > 10)
    {
       cout << "usage: " << argv[0]
-           << " <accession> <num_bins> <output folder path> <R1> <R2> [memory_budget_GB] [min_count] [read_threads]\n"
+           << " <accession> <num_bins> <output folder path> <R1> <R2> [memory_budget_GB] [min_count] [read_threads] [min_count_source]\n"
            << "\n"
            << "  Writes <output>/<accession>.kbin — one self-indexed pack file holding\n"
            << "  this accession's canonical " << k << "-mers for every bin.\n"
@@ -416,7 +433,10 @@ int main(int argc, char *argv[])
            << "\n"
            << "  read_threads decompresses the mates concurrently (default 2, one per file).\n"
            << "  Set 1 to serialise, e.g. on a single spinning disk where concurrent reads\n"
-           << "  seek-thrash; on NVMe / parallel filesystems 2 roughly halves the read phase.\n";
+           << "  seek-thrash; on NVMe / parallel filesystems 2 roughly halves the read phase.\n"
+           << "\n"
+           << "  min_count_source is recorded in the pack metadata: default or given\n"
+           << "  (default: given when min_count is set, else default).\n";
       return -1;
    }
 
@@ -466,6 +486,8 @@ int main(int argc, char *argv[])
       int read_threads = (argc >= 9) ? atoi(argv[8]) : 2;
       if (read_threads < 1) read_threads = 1;
 
+      const string min_count_source = (argc >= 10) ? string(argv[9]) : (argc >= 8 ? "given" : "default");
+
       cout << "***************************** " << endl;
       cout << "PROCESSING ACCESSION: " << accession << endl;
       cout << "  k = " << k << ", bins = " << NUM_FILES
@@ -506,6 +528,7 @@ int main(int argc, char *argv[])
       // nothing is shared unsynchronised. Read order does not matter — counts are
       // summed wherever a k-mer occurs.
       atomic<size_t> total_reads{0};
+      InputStats input_stats;
       auto drain_file = [&](const string &accession_path)
       {
          SequenceReader reader(accession_path);
@@ -515,10 +538,10 @@ int main(int argc, char *argv[])
          while (reader.next_batch(batch, BATCH_READS))
          {
             gate.acquire();                       // blocks if too many in flight
-            pool.push_task([batch = std::move(batch), &store, NUM_FILES, &gate]() mutable
+            pool.push_task([batch = std::move(batch), &store, NUM_FILES, &gate, &input_stats]() mutable
                            {
                               kmers_obj ko(std::move(batch));
-                              ko.index(store, NUM_FILES);
+                              ko.index(store, NUM_FILES, input_stats);
                               gate.release();
                            });
          }
@@ -563,23 +586,38 @@ int main(int argc, char *argv[])
          // per-bin sorts dominate this stage, so we run them across the same pool
          // that did the counting instead of one bin at a time. Sorting is done in
          // place, so this adds no memory beyond what accumulation already held.
+         vector<size_t> before_filter(NUM_FILES, 0);
          for (size_t b = 0; b < NUM_FILES; b++)
-            pool.push_task([&store, b, min_count]() { store.finalize_bin_inplace(b, min_count); });
+            pool.push_task([&store, &before_filter, b, min_count]()
+                           { store.finalize_bin_inplace(b, min_count, &before_filter[b]); });
          pool.wait_for_tasks();
 
          // Phase B — write bins in ascending order (the pack's offset table
          // requires it). Each slice is already finalised, so this is just I/O and
          // stays serial; free each bin's memory as soon as it is written.
-         size_t total_kmers = 0;
+         kmer::PackStats stats;
          for (size_t b = 0; b < NUM_FILES; b++)
          {
             const vector<kmer::Record>& slice = store.bin_slice(b);
             pack.write_bin((uint32_t)b, slice);
-            total_kmers += slice.size();
+            stats.add_bin(slice.data(), slice.size());
             store.release_bin(b);
          }
-         pack.finish();
-         cout << "  " << total_kmers << " distinct k-mers across "
+
+         uint64_t distinct_before = 0;
+         for (size_t n : before_filter) distinct_before += n;
+         kmer::PackMeta meta = kmer::pack_meta_base(accession, "reads", "kmer_count");
+         meta.set("num_bins", (uint64_t)NUM_FILES);
+         meta.set("min_kmer_count", (uint64_t)min_count);
+         meta.set("min_kmer_count_source", min_count_source);
+         stats.to_meta(meta);
+         meta.set("distinct_kmers_before_filter", distinct_before);
+         meta.set("input_reads", (uint64_t)total_reads);
+         meta.set("input_bases", (uint64_t)input_stats.bases);
+         meta.set("skipped_kmers_non_acgt", (uint64_t)(input_stats.windows - input_stats.counted));
+         pack.finish(meta.text());
+         kmer::write_meta_tsv(output_path + accession + ".pack_stats.tsv", meta);
+         cout << "  " << stats.distinct << " distinct k-mers across "
               << NUM_FILES << " bins" << endl;
       }
       store.close_spill();

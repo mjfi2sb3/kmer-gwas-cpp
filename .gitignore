@@ -3,6 +3,7 @@
 .nextflow.log*
 work/
 results/
+nf_reports/
 
 # Compiled binaries
 build/
@@ -11,6 +12,7 @@ src/kmer_count
 src/matrix_merge
 src/bits_to_text
 src/kbin_dump
+src/kmc_to_pack
 
 # Data files
 data/

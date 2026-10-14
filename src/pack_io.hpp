@@ -17,11 +17,18 @@
 //     | (B+1) x uint64   |   byte offset of each bin; [B] is the end sentinel,
 //     | offset table     |   so bin i occupies [off[i], off[i+1])
 //     +------------------+
+//     | metadata         |   version 2 only: UTF-8 text, one key=value per line
+//     | uint64 length    |   version 2 only: byte length of the metadata
+//     +------------------+
 //     | PackFooter       |   fixed 24 bytes, magic last => at end of file
 //     +------------------+ EOF
 //
 //  Reading bin i is: read the 24-byte tail, seek to off[i], read
 //  off[i+1]-off[i] bytes. No scan, no extraction, no temporary files.
+//
+//  Version 1 packs have no metadata block; readers accept both versions. The
+//  footer layout is the same in both, so a version 1 reader that does not check
+//  the version still finds the bins.
 //
 //  One pack file per accession holds every bin, so Stage 2 reads one file per
 //  accession and seeks within it, rather than materialising a separate file per
@@ -33,22 +40,33 @@
 //
 //  SELF-DESCRIBING: the footer records k and the record width. A pack written
 //  at k=31 (10-byte records) opened by a binary built for k=51 (18-byte records)
-//  is rejected with a clear error instead of decoding to silent nonsense.
+//  is rejected with a clear error instead of decoding to silent nonsense. The
+//  metadata records how the pack was made (source, filter, versions) and summary
+//  statistics; see PackMeta. It holds no dates, hosts or paths, so the same input
+//  always gives the same bytes.
 // ===========================================================================
 
 #include "kmer_key.hpp"
+#include "version.hpp"
 
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace kmer {
 
-static constexpr uint16_t PACK_VERSION = 1;
+static constexpr uint16_t PACK_VERSION     = 2;   // version written
+static constexpr uint16_t PACK_VERSION_MIN = 1;   // oldest version read
+
+// Bytes read from the end of a pack when it is opened. This covers the footer,
+// the offset table and the metadata of a pack with up to about 7,000 bins.
+static constexpr std::streamoff PACK_TAIL_READ = 64 * 1024;
 
 #pragma pack(push, 1)
 struct PackFooter {
@@ -65,6 +83,182 @@ struct PackFooter {
 static_assert(sizeof(PackFooter) == 24, "PackFooter must be exactly 24 bytes");
 
 inline const char* pack_magic() { return "KGWS"; }
+
+// ---------------------------------------------------------------------------
+// PackMeta — ordered key=value metadata stored in a version 2 pack.
+// Keys must not contain '=' or a newline; newlines in values are replaced.
+// ---------------------------------------------------------------------------
+class PackMeta {
+public:
+    void set(const std::string& key, const std::string& value)
+    {
+        std::string v = value;
+        for (char& c : v) if (c == '\n' || c == '\r') c = ' ';
+        for (auto& kv : kv_) if (kv.first == key) { kv.second = v; return; }
+        kv_.emplace_back(key, v);
+    }
+    void set(const std::string& key, uint64_t value) { set(key, std::to_string(value)); }
+
+    const std::vector<std::pair<std::string, std::string>>& items() const { return kv_; }
+
+    std::string get(const std::string& key) const
+    {
+        for (auto& kv : kv_) if (kv.first == key) return kv.second;
+        return std::string();
+    }
+
+    std::string text() const
+    {
+        std::string t;
+        for (auto& kv : kv_) t += kv.first + "=" + kv.second + "\n";
+        return t;
+    }
+
+    static PackMeta parse(const std::string& text)
+    {
+        PackMeta m;
+        std::istringstream in(text);
+        std::string line;
+        while (std::getline(in, line)) {
+            const size_t eq = line.find('=');
+            if (eq != std::string::npos) m.kv_.emplace_back(line.substr(0, eq), line.substr(eq + 1));
+        }
+        return m;
+    }
+
+private:
+    std::vector<std::pair<std::string, std::string>> kv_;
+};
+
+// Metadata with every standard key in a fixed order, so that every pack (and
+// every row of the statistics table) has the same fields. Fields that do not
+// apply to a pack keep the value "NA".
+//
+// Keys:
+//   accession                      accession name
+//   input_mode                     reads or kmc
+//   created_by                     the program that wrote the pack
+//   pipeline_version, kmc_api_version
+//   kmer_size, canonical_kmers, num_bins
+//   min_kmer_count                 the count filter applied
+//   min_kmer_count_source          default or given (reads); database or enforced (kmc)
+//   count_limit                    the largest count stored; larger counts are stored as it
+//   input_reads, input_bases       reads (each mate counts as one) and bases read (reads)
+//   skipped_kmers_non_acgt         k-mer positions with a base other than A, C, G, T (reads)
+//   distinct_kmers_before_filter   distinct k-mers before the count filter
+//   distinct_kmers_after_filter    distinct k-mers in the pack
+//   kmer_occurrences_after_filter  sum of the counts in the pack
+//   max_count_per_kmer             the largest count of one k-mer
+//   kmers_at_count_limit           k-mers whose count reached count_limit
+//   estimated_kmer_coverage        see PackStats::coverage_peak
+//   kmers_in_smallest_bin, kmers_in_largest_bin   distinct k-mers per bin
+inline PackMeta pack_meta_base(const std::string& accession, const std::string& input_mode,
+                               const std::string& created_by)
+{
+    PackMeta m;
+    m.set("accession", accession);
+    m.set("input_mode", input_mode);
+    m.set("created_by", created_by);
+    m.set("pipeline_version", KMER_GWAS_VERSION);
+    m.set("kmc_api_version", "NA");
+    m.set("kmer_size", (uint64_t)K);
+    m.set("canonical_kmers", "yes");
+    for (const char* key : {"num_bins", "min_kmer_count", "min_kmer_count_source"})
+        m.set(key, "NA");
+    m.set("count_limit", (uint64_t)COUNT_MAX);
+    for (const char* key : {"input_reads", "input_bases", "skipped_kmers_non_acgt",
+                            "distinct_kmers_before_filter", "distinct_kmers_after_filter",
+                            "kmer_occurrences_after_filter", "max_count_per_kmer",
+                            "kmers_at_count_limit", "estimated_kmer_coverage",
+                            "kmers_in_smallest_bin", "kmers_in_largest_bin"})
+        m.set(key, "NA");
+    return m;
+}
+
+// Writes the metadata as a two-line TSV (keys, then values), one row of the
+// pipeline's statistics table.
+inline void write_meta_tsv(const std::string& path, const PackMeta& m)
+{
+    std::ofstream out(path);
+    std::string keys, values;
+    for (auto& kv : m.items()) {
+        if (!keys.empty()) { keys += '\t'; values += '\t'; }
+        keys += kv.first;
+        values += kv.second;
+    }
+    out << keys << "\n" << values << "\n";
+    if (!out) throw std::runtime_error("cannot write " + path);
+}
+
+// ---------------------------------------------------------------------------
+// PackStats — summary statistics of the records written to a pack. Feed it
+// every bin slice (in any order) and copy the results into the metadata.
+// `limit` is the largest count the input can hold: COUNT_MAX, or less for a
+// KMC database with a smaller counter. Counts at or above it are counted as
+// reaching the limit and are left out of the coverage estimate.
+// ---------------------------------------------------------------------------
+struct PackStats {
+    explicit PackStats(Count limit_ = COUNT_MAX) : limit(limit_ ? limit_ : 1) {}
+
+    Count limit;
+    std::vector<uint64_t> hist = std::vector<uint64_t>((size_t)COUNT_MAX + 1, 0);
+    uint64_t distinct  = 0;
+    uint64_t total     = 0;
+    uint64_t max_count = 0;
+    uint64_t bin_min   = UINT64_MAX;
+    uint64_t bin_max   = 0;
+
+    void add_bin(const Record* r, size_t n)
+    {
+        for (size_t i = 0; i < n; i++) {
+            const Count c = r[i].count;
+            hist[c]++;
+            total += c;
+            if (c > max_count) max_count = c;
+        }
+        distinct += n;
+        if (n < bin_min) bin_min = n;
+        if (n > bin_max) bin_max = n;
+    }
+
+    // K-mers whose count reached the limit. A count can be above it when the
+    // two strands of a non-canonical (-b) KMC database were added together.
+    uint64_t at_limit() const
+    {
+        uint64_t n = 0;
+        for (size_t c = limit; c <= (size_t)COUNT_MAX; c++) n += hist[c];
+        return n;
+    }
+
+    // Estimated k-mer coverage: starting at the smallest count present, walk
+    // down the error tail to its first low point, then take the most common
+    // count above it. Counts at or above the limit are excluded. "NA" when the
+    // histogram has no such shape (for example, every count is 1).
+    std::string coverage_peak() const
+    {
+        const size_t end = limit;
+        size_t c = 1;
+        while (c < end && hist[c] == 0) c++;
+        while (c + 1 < end && hist[c + 1] <= hist[c]) c++;
+        size_t best = 0;
+        for (size_t i = c + 1; i < end; i++)
+            if (hist[i] > (best ? hist[best] : 0)) best = i;
+        return best ? std::to_string(best) : std::string("NA");
+    }
+
+    // Writes the statistics fields into `m`.
+    void to_meta(PackMeta& m) const
+    {
+        m.set("count_limit", (uint64_t)limit);
+        m.set("distinct_kmers_after_filter", distinct);
+        m.set("kmer_occurrences_after_filter", total);
+        m.set("max_count_per_kmer", max_count);
+        m.set("kmers_at_count_limit", at_limit());
+        m.set("estimated_kmer_coverage", coverage_peak());
+        m.set("kmers_in_smallest_bin", distinct ? bin_min : 0);
+        m.set("kmers_in_largest_bin", bin_max);
+    }
+};
 
 // ---------------------------------------------------------------------------
 // PackWriter — bins must be written in ascending order, each exactly once.
@@ -99,8 +293,9 @@ public:
     void write_bin(uint32_t bin, const std::vector<Record>& recs)
     { write_bin(bin, recs.data(), recs.size()); }
 
-    // Write the offset table and footer. Must be called exactly once.
-    void finish()
+    // Write the offset table, the metadata and the footer. Must be called
+    // exactly once.
+    void finish(const std::string& metadata = std::string())
     {
         if (next_bin_ != num_bins_)
             throw std::runtime_error("PackWriter: only " + std::to_string(next_bin_) + " of "
@@ -114,8 +309,11 @@ public:
         f.reserved     = 0;
         std::memcpy(f.magic, pack_magic(), 4);
 
+        const uint64_t meta_len = metadata.size();
         out_.write(reinterpret_cast<const char*>(offsets_.data()),
                    (std::streamsize)(offsets_.size() * sizeof(uint64_t)));
+        out_.write(metadata.data(), (std::streamsize)meta_len);
+        out_.write(reinterpret_cast<const char*>(&meta_len), sizeof(meta_len));
         out_.write(reinterpret_cast<const char*>(&f), sizeof(f));
         out_.flush();
         if (!out_) throw std::runtime_error("PackWriter: failed to finalise " + path_);
@@ -150,15 +348,30 @@ public:
         if (size < (std::streamoff)sizeof(PackFooter))
             throw std::runtime_error("PackReader: " + path + " is too small to be a pack file");
 
-        in_.seekg(size - (std::streamoff)sizeof(PackFooter), std::ios::beg);
-        in_.read(reinterpret_cast<char*>(&f_), sizeof(f_));
+        // One read of the file's tail normally covers the footer, the offset
+        // table and the metadata; anything outside it is read separately.
+        const std::streamoff tail_len = size < PACK_TAIL_READ ? size : PACK_TAIL_READ;
+        const std::streamoff tail_beg = size - tail_len;
+        std::vector<char> tail((size_t)tail_len);
+        in_.seekg(tail_beg, std::ios::beg);
+        in_.read(tail.data(), (std::streamsize)tail_len);
         if (!in_) throw std::runtime_error("PackReader: cannot read footer of " + path);
+        auto read_at = [&](std::streamoff off, void* dst, size_t n, const char* what) {
+            if (off < 0 || off + (std::streamoff)n > size)
+                throw std::runtime_error(std::string("PackReader: ") + what + " lies outside " + path);
+            if (off >= tail_beg) { std::memcpy(dst, tail.data() + (off - tail_beg), n); return; }
+            in_.seekg(off, std::ios::beg);
+            in_.read(static_cast<char*>(dst), (std::streamsize)n);
+            if (!in_) throw std::runtime_error(std::string("PackReader: cannot read ") + what + " of " + path);
+        };
+        std::memcpy(&f_, tail.data() + tail_len - (std::streamoff)sizeof(PackFooter), sizeof(f_));
 
         if (std::memcmp(f_.magic, pack_magic(), 4) != 0)
             throw std::runtime_error("PackReader: " + path + " is not a pack file (bad magic)");
-        if (f_.version != PACK_VERSION)
+        if (f_.version < PACK_VERSION_MIN || f_.version > PACK_VERSION)
             throw std::runtime_error("PackReader: " + path + " has pack version "
-                                     + std::to_string(f_.version) + ", this build expects "
+                                     + std::to_string(f_.version) + ", this build reads versions "
+                                     + std::to_string(PACK_VERSION_MIN) + " to "
                                      + std::to_string(PACK_VERSION));
         // The check that makes a k mismatch loud instead of silent.
         if (f_.kmer_k != (uint16_t)K)
@@ -173,20 +386,41 @@ public:
                                      + std::to_string(RECORD_BYTES));
 
         offsets_.resize(f_.num_bins + 1);
-        in_.seekg((std::streamoff)f_.index_offset, std::ios::beg);
-        in_.read(reinterpret_cast<char*>(offsets_.data()),
-                 (std::streamsize)(offsets_.size() * sizeof(uint64_t)));
-        if (!in_) throw std::runtime_error("PackReader: cannot read offset table of " + path);
+        read_at((std::streamoff)f_.index_offset, offsets_.data(),
+                offsets_.size() * sizeof(uint64_t), "offset table");
 
         for (size_t i = 1; i < offsets_.size(); i++)
             if (offsets_[i] < offsets_[i-1])
                 throw std::runtime_error("PackReader: corrupt (non-monotonic) offset table in " + path);
         if (offsets_.back() != f_.index_offset)
             throw std::runtime_error("PackReader: offset table end does not match data size in " + path);
+
+        // Version 2: the metadata sits between the offset table and an 8-byte
+        // length just before the footer.
+        const std::streamoff table_end = (std::streamoff)(f_.index_offset + offsets_.size() * sizeof(uint64_t));
+        const std::streamoff footer_beg = size - (std::streamoff)sizeof(PackFooter);
+        if (f_.version >= 2) {
+            const std::streamoff meta_end = footer_beg - 8;
+            uint64_t meta_len = 0;
+            if (meta_end < table_end)
+                throw std::runtime_error("PackReader: " + path + " is too small for its metadata");
+            read_at(meta_end, &meta_len, sizeof(meta_len), "metadata length");
+            if (table_end + (std::streamoff)meta_len != meta_end)
+                throw std::runtime_error("PackReader: corrupt metadata length in " + path);
+            std::string text((size_t)meta_len, '\0');
+            if (meta_len) read_at(table_end, &text[0], (size_t)meta_len, "metadata");
+            meta_ = PackMeta::parse(text);
+        } else if (table_end != footer_beg) {
+            throw std::runtime_error("PackReader: offset table end does not meet the footer in " + path);
+        }
     }
 
     uint32_t num_bins() const { return f_.num_bins; }
     int      kmer_k()   const { return f_.kmer_k; }
+    int      version()  const { return f_.version; }
+
+    // Metadata of a version 2 pack; empty for version 1.
+    const PackMeta& metadata() const { return meta_; }
 
     size_t bin_bytes(uint32_t bin) const
     {
@@ -223,6 +457,7 @@ private:
     mutable std::ifstream in_;
     PackFooter            f_{};
     std::vector<uint64_t> offsets_;
+    PackMeta              meta_;
 };
 
 // ---------------------------------------------------------------------------

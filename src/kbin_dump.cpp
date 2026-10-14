@@ -23,7 +23,8 @@
 //  process, with no external pigz pipe.
 //
 //  The pack layout (see src/pack_io.hpp) is: bin records back to back, then a
-//  (num_bins + 1) x uint64 offset table, then a 24-byte footer ending in the
+//  (num_bins + 1) x uint64 offset table, then (version 2 only) a key=value text
+//  metadata block and its uint64 length, then a 24-byte footer ending in the
 //  magic "KGWS". Each record is a 2-bit-per-base packed key (8 bytes for k <= 32,
 //  16 bytes otherwise) followed by a uint16 count. The first base of the k-mer
 //  sits in the highest bits, base values A=0 C=1 G=2 T=3, matching decode() in
@@ -41,6 +42,7 @@
 #include <fstream>
 #include <iostream>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -187,6 +189,29 @@ int main(int argc, char** argv) {
             }
             std::cout << "k-mers/bin   : min " << mn << ", mean " << (total / f.num_bins)
                       << ", max " << mx << "\n";
+        }
+        // Version 2 metadata: between the offset table and an 8-byte length just
+        // before the footer.
+        if (f.version >= 2) {
+            const long long table_end = (long long)f.index_offset + (long long)off.size() * 8;
+            const long long meta_end  = size - (long long)sizeof(Footer) - 8;
+            uint64_t meta_len = 0;
+            if (meta_end >= table_end) {
+                in.seekg(meta_end, std::ios::beg);
+                in.read(reinterpret_cast<char*>(&meta_len), sizeof(meta_len));
+            }
+            if (!in || meta_end < table_end || table_end + (long long)meta_len != meta_end)
+                die("corrupt metadata block in " + path);
+            std::string text(meta_len, '\0');
+            in.seekg(table_end, std::ios::beg);
+            if (meta_len) in.read(&text[0], (std::streamsize)meta_len);
+            if (!in) die("cannot read the metadata of " + path);
+            std::cout << "metadata     :\n";
+            std::istringstream lines(text);
+            for (std::string line; std::getline(lines, line); )
+                std::cout << "  " << line << "\n";
+        } else {
+            std::cout << "metadata     : none (version 1 pack)\n";
         }
         return 0;
     }

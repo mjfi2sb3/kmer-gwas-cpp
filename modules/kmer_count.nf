@@ -20,7 +20,7 @@ process KMER_COUNT {
     // k is in the directory name so bin files from different k-mer lengths can
     // never be mixed: they store fixed-width k-mers and are unreadable at any
     // other k. MATRIX_MERGE reads this same path (see main.nf kmer_count_root).
-    publishDir "${params.output_dir}/kmer_count_k${params.kmer_size}", mode: params.kmer_count_publish_mode, overwrite: true
+    publishDir "${params.output_dir}/kmer_count_k${params.kmer_size}", mode: params.kmer_count_publish_mode, overwrite: true, pattern: "*.kbin"
 
     input:
         val accession
@@ -29,6 +29,7 @@ process KMER_COUNT {
 
     output:
         tuple val(accession), path("${accession}.kbin"), emit: accession_pack
+        path "${accession}.pack_stats.tsv",               emit: stats
 
     script:
     // The accumulation budget is auto-sized INSIDE kmer_count from the memory
@@ -71,6 +72,6 @@ process KMER_COUNT {
     done
     [ -z "\$R2" ] && { echo "ERROR: no R2 file found for ${accession} in ${data_dir}" >&2; exit 1; }
 
-    ./kmer_count ${accession} ${num_bins} ./ "\$R1" "\$R2" ${params.kmer_count_budget_gb} ${params.min_kmer_count} ${params.kmer_count_read_threads}
+    ./kmer_count ${accession} ${num_bins} ./ "\$R1" "\$R2" ${params.kmer_count_budget_gb} ${params.min_kmer_count != null ? params.min_kmer_count : 2} ${params.kmer_count_read_threads} ${params.min_kmer_count != null ? 'given' : 'default'}
     """
 }

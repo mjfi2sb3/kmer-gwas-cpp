@@ -16,8 +16,7 @@
 //  share of a global memory budget. When a bin exceeds its share:
 //
 //     1. COMPACT  - sort the buffer and run-length-merge equal keys, summing
-//                   counts. At 30x coverage this reclaims ~97% of the space, so
-//                   in the common case nothing ever reaches disk.
+//                   counts.
 //     2. SPILL    - only if the bin is STILL over its share after compaction,
 //                   append the compacted block to ONE shared spill file and
 //                   record (offset, count). This is a safety valve for genomes
@@ -106,7 +105,10 @@ public:
     // the per-bin sorts dominate this stage, so parallelising them is the win.
     // (The pack WRITE stays serial in the caller — bins must be written in
     // ascending order — but it is cheap I/O next to the sorting.)
-    size_t finalize_bin_inplace(size_t bin, Count min_count)
+    //
+    // If `before_filter` is given, it receives the number of distinct k-mers
+    // before the min_count filter.
+    size_t finalize_bin_inplace(size_t bin, Count min_count, size_t* before_filter = nullptr)
     {
         Bin& b = bins_[bin];
         sort_and_compact(b.buf);
@@ -142,6 +144,7 @@ public:
         // is a legitimate k-mer (poly-A: A encodes as 00), so dropping it would
         // discard real data. Invalid windows are skipped at counting time rather
         // than funnelled into the zero key, so nothing spurious reaches here.
+        if (before_filter) *before_filter = b.buf.size();
         size_t w = 0;
         for (size_t i = 0; i < b.buf.size(); i++)
             if (b.buf[i].count >= min_count)

@@ -6,13 +6,10 @@
 // files are created.
 //
 // The pack directory is passed as a value (an absolute path the task reads
-// directly), not a Nextflow `path` input. With large cohorts, staging the packs
-// individually would create one symlink per accession for every bin task; and the
-// directory is the published output_dir, which is mutated after a run (re-publish
-// timestamps, and --compress_kbin_packs rewriting each .kbin to .kbin.gz). Hashing
-// it as a `path` broke -resume — see the note in main.nf. The `# cache signature`
-// line below folds the Stage-1 pack-affecting param that is not otherwise in this
-// script (min_kmer_count) into the task hash, so changing it re-runs the merge.
+// directly), not a Nextflow `path` input. This avoids creating one symlink per
+// accession per bin task and allows the directory to be mutated after a run
+// (re-publish timestamps, and --compress_kbin_packs rewriting .kbin to .kbin.gz)
+// without breaking -resume.
 process MATRIX_MERGE {
     tag "bin_${bin_idx}"
     publishDir "${params.output_dir}/matrix", mode: params.matrix_publish_mode, overwrite: true
@@ -26,9 +23,13 @@ process MATRIX_MERGE {
         path "matrix_*/${bin_idx}_core.txt.gz",   emit: core_file, optional: true
 
     script:
+    // The Stage 1 input directory (reads or KMC databases). Stage 1 is re-run when
+    // it changes, but the packs keep the same paths, so it must be in this task's
+    // hash too or -resume would reuse a matrix built from the old packs.
+    def stage1_input = file(params.input_mode == 'kmc' ? (params.kmc_dir ?: params.data_dir) : params.data_dir).toAbsolutePath()
     """
     # cache signature (do not remove): folds Stage-1 pack-affecting params into this
-    # task's hash so -resume re-runs the merge when they change. min_kmer_count=${params.min_kmer_count}
+    # task's hash so -resume re-runs the merge when they change. min_kmer_count=${params.min_kmer_count} input_mode=${params.input_mode} stage1_input=${stage1_input}
     #
     # -DKMER_K must match the value KMER_COUNT used. A mismatch is caught at run
     # time by the pack footer, but building consistently avoids the error.
@@ -45,7 +46,8 @@ process MATRIX_MERGE {
         --count      ${params.keep_kmer_counts} \\
         --core       ${params.write_core_kmers ? 'y' : 'n'} \\
         --bins       ${params.num_bins} \\
-        --threads    ${task.cpus}
+        --threads    ${task.cpus} \\
+        --check_accession ${params.skip_accession_check ? 'n' : 'y'}
 
     if command -v pigz > /dev/null 2>&1; then
         pigz -p ${task.cpus} matrix_*/${bin_idx}_matrix.tsv

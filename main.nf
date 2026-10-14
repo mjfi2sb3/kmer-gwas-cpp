@@ -2,6 +2,8 @@
 nextflow.enable.dsl = 2
 
 include { KMER_COUNT    } from './modules/kmer_count'
+include { KMC_TO_PACK   } from './modules/kmc_to_pack'
+include { KMC_HEADERS   } from './modules/kmc_headers'
 include { MATRIX_MERGE  } from './modules/matrix_merge'
 include { BUILD_TOOLS   } from './modules/build_tools'
 include { COMPRESS_PACKS } from './modules/compress_packs'
@@ -20,21 +22,34 @@ def helpMessage() {
         --accessions_file        Path to file listing accession IDs, one per line   [default: ${params.accessions_file}]
         --data_dir               Directory containing paired FASTQ files            [default: ${params.data_dir}]
         --output_dir             Output directory                                   [default: ${params.output_dir}]
+        --input_mode             'reads' (paired FASTQ/FASTA) or 'kmc' (pre-built   [default: ${params.input_mode}]
+                                 KMC databases, <kmc_dir>/<accession>.kmc_pre/.kmc_suf)
+        --kmc_dir                Directory holding the KMC databases (kmc mode)     [default: data_dir]
+        --kmc_allow_mixed        kmc mode: warn instead of stopping when databases  [default: ${params.kmc_allow_mixed}]
+                                 were built with different -ci, -cx or counter sizes
 
       k-mers and matrix content
-        --kmer_size              k-mer length; must be ODD, 15..63                  [default: ${params.kmer_size}]
+        --kmer_size              k-mer length; must be ODD, 15..63                  [required in reads mode]
+                                 In kmc mode it is read from the databases; if you
+                                 also pass it, it must match them.
                                  k <= 32 uses a compact 10-byte record instead of 18,
                                  cutting Stage 1 output by ~44%. Compiled in, so there
                                  is no runtime cost to changing it.
                                  NOTE: changing k invalidates existing bin files.
+                                 Output k-mers are canonical: of a k-mer and its reverse
+                                 complement, the smaller one (A<C<G<T order) is kept.
         --num_bins               Number of k-mer bins (parallelism / output size)   [default: ${params.num_bins}]
-        --min_kmer_count         Drop k-mers seen fewer times in an accession       [default: ${params.min_kmer_count}]
+        --min_kmer_count         Drop k-mers seen fewer times in an accession       [default: 2 in reads mode]
+                                 In kmc mode the databases are kept as they are (their own
+                                 -ci applies); a value above their -ci is enforced as well.
         --threshold              Two-sided MAF filter on accession occurrence      [default: ${params.threshold}]
                                  Keeps k-mers in [threshold, n_acc - threshold] accessions.
                                  Filters on HOW MANY ACCESSIONS carry the k-mer, not on
                                  its count within an accession. 0 disables the filter.
         --keep_kmer_counts       'y' = keep raw kmer counts, 'n' = presence/absence   [default: ${params.keep_kmer_counts}]
                                  (--count is a deprecated alias)
+        --skip_accession_check   Allow packs whose recorded accession differs from  [default: ${params.skip_accession_check}]
+                                 their file name (packs renamed on purpose)
         --delimiter              Value separator (text encoding): 'tab','space','none' [default: ${params.delimiter}]
                                  'none' concatenates and is presence/absence only.
         --encoding               Matrix encoding: 'text' or 'bits'                  [default: ${params.encoding}]
@@ -115,9 +130,8 @@ if (params.help) {
     exit 0
 }
 
-// Backwards compatibility: --core was renamed to --write_core_kmers in v3.7.2.
-// The value is mapped through in nextflow.config (params are immutable here);
-// this just warns so existing commands keep working. Drop the shim later.
+// Backwards compatibility: deprecated flags mapped to current params for
+// continuity. Remove these shims in a future release.
 if (params.core != null) {
     log.warn "--core is deprecated and was renamed to --write_core_kmers; " +
              "honouring it as --write_core_kmers ${params.write_core_kmers}. " +
@@ -165,12 +179,14 @@ def paramSummary(String accessions_file, String data_dir) {
         row('work_dir', workflow.workDir),
         head('Input / output'),
         row('accessions_file', accessions_file),
-        row('data_dir',        data_dir),
+        row('data_dir',        params.input_mode == 'kmc' ? '(n/a: kmc mode)' : data_dir),
         row('output_dir',      params.output_dir),
+        row('input_mode',      params.input_mode),
+        row('kmc_dir',         params.input_mode == 'kmc' ? file(params.kmc_dir ?: data_dir).toAbsolutePath().toString() : '(n/a: reads mode)'),
         head('k-mers and matrix content'),
-        row('kmer_size',      params.kmer_size),
+        row('kmer_size',      kmerSizeText()),
         row('num_bins',       params.num_bins),
-        row('min_kmer_count', params.min_kmer_count),
+        row('min_kmer_count', minCountText()),
         row('threshold',      params.threshold),
         row('keep kmer counts',          params.keep_kmer_counts),
         row('delimiter',      params.delimiter),
@@ -202,30 +218,121 @@ def paramSummary(String accessions_file, String data_dir) {
     log.info lines.join('\n')
 }
 
+// The Stage 1 count filter as it applies in this run.
+def minCountText() {
+    if (params.input_mode == 'kmc')
+        return params.min_kmer_count == null ? "not set: each database's own -ci applies (see kmc_databases.tsv)"
+                                             : "${params.min_kmer_count} (applied where it is above a database's -ci)"
+    return params.min_kmer_count == null ? '2' : "${params.min_kmer_count}"
+}
+
+// The k-mer size, and in kmc mode where it came from.
+def kmerSizeText() {
+    if (params.input_mode != 'kmc') return "${params.kmer_size}"
+    if (params.kmc_kmer_size_from_db) return "${params.kmer_size} (read from the KMC databases)"
+    if (params.kmc_detected_kmer_size != null) return "${params.kmer_size} (given; matches the KMC databases)"
+    return "${params.kmer_size} (given; not read from the KMC databases)"
+}
+
+// One MD5 over the code a run uses: main.nf, nextflow.config, modules/*.nf and the
+// C++ sources in src_dir (.cpp, .hpp, .h, Makefile; built binaries are left out).
+// Files are taken in sorted order and each file's relative path is part of the
+// digest, so two copies of the code give the same value only if these files match.
+def codeChecksum() {
+    try {
+        def md    = java.security.MessageDigest.getInstance('MD5')
+        def files = [:]
+        def add   = { String tag, File root, Closure keep ->
+            if (!root.isDirectory()) return
+            root.eachFileRecurse(groovy.io.FileType.FILES) { f ->
+                if (keep(f)) files["${tag}/${root.toPath().relativize(f.toPath())}".toString()] = f
+            }
+        }
+        def proj = projectDir.toFile()
+        ['main.nf', 'nextflow.config'].each { n -> def f = new File(proj, n); if (f.isFile()) files[n] = f }
+        add('modules', new File(proj, 'modules'), { File f -> f.name.endsWith('.nf') })
+        add('src', new File(params.src_dir.toString()),
+            { File f -> f.name ==~ /.*\.(cpp|hpp|h)/ || f.name == 'Makefile' })
+        files.keySet().sort().each { k ->
+            md.update(k.getBytes('UTF-8')); md.update((byte) 0)
+            md.update(files[k].bytes);      md.update((byte) 0)
+        }
+        return md.digest().encodeHex().toString()
+    } catch (Exception e) { return "n/a (${e.message})" }
+}
+
+// `git describe` of the code directory when it is a git checkout, else n/a.
+def gitDescribe() {
+    if (!new File(projectDir.toFile(), '.git').exists()) return 'n/a'
+    try {
+        def p = ['git', '-C', projectDir.toString(), 'describe', '--tags', '--always', '--dirty'].execute()
+        p.waitForOrKill(10000)
+        def out = p.text.trim()
+        return (p.exitValue() == 0 && out) ? out : 'n/a'
+    } catch (Exception e) { return 'n/a' }
+}
+
+def containerText() {
+    def c = workflow.container
+    if (!c) return 'none'
+    return (c instanceof Map) ? c.values().unique().join(', ') : c.toString()
+}
+
+// data_dir is the input only in reads mode; kmc mode reads kmc_dir.
+def dataDirText(String data_dir) {
+    return params.input_mode == 'kmc' ? 'n/a (kmc mode)' : data_dir
+}
+
+// Logs a short summary of pack_stats.tsv: size and coverage ranges, and the
+// accessions with the fewest distinct k-mers (often failed or low-coverage samples).
+def logPackSummary(f) {
+    def lines = f.readLines().findAll { it.trim() }
+    if (lines.size() < 2) return
+    def keys = lines[0].split('\t') as List
+    def rows = lines.drop(1).collect { l -> [keys, l.split('\t', -1) as List].transpose().collectEntries() }
+    def nums = { key -> rows.collect { it[key] }.findAll { it && it != 'NA' }.collect { it as long }.sort() }
+    def range = { v -> v ? "min ${v[0]}, median ${v[(int)(v.size() / 2)]}, max ${v[-1]}" : 'n/a' }
+    def lowest = rows.findAll { it.distinct_kmers_after_filter && it.distinct_kmers_after_filter != 'NA' }
+                     .sort { (it.distinct_kmers_after_filter as long) }.take(3)
+                     .collect { "${it.accession} (${it.distinct_kmers_after_filter})" }.join(', ')
+    log.info "Pack statistics (${rows.size()} packs, ${f}):\n" +
+             "  distinct k-mers : ${range(nums('distinct_kmers_after_filter'))}\n" +
+             "  k-mer coverage  : ${range(nums('estimated_kmer_coverage'))} (estimated)\n" +
+             "  fewest k-mers   : ${lowest}"
+}
+
 // ---------------------------------------------------------------------------
 // Run manifest
 // ---------------------------------------------------------------------------
-// Records the parameters a results directory was produced with. k in particular
-// is not recoverable from the output files themselves, and reading bin files at
-// the wrong k yields silent nonsense rather than an error — so the manifest is
-// the record of what a given results/ actually contains.
+// Records the settings a results directory was produced with. Each pack records
+// how it was made (input mode, count filter, versions, statistics; see kbin_dump --info),
+// but the Stage 2 settings (threshold, encoding, ...) cannot be read back from the
+// outputs, so the manifest is the record of how a given results/ directory was made.
 def writeManifest(String accessions_file, String data_dir, int n_accessions) {
     def dir = file(params.output_dir)
     dir.mkdirs()
     file("${params.output_dir}/run_manifest.txt").text = """\
         # kmer-GWAS run manifest
-        # Written at launch; describes how this results directory was produced.
+        # Written at launch; the completion section is added when the run ends.
         pipeline_version    = ${workflow.manifest.version ?: 'n/a'}
         run_name            = ${workflow.runName}
         started             = ${workflow.start}
+        status              = running
         nextflow_version    = ${workflow.nextflow.version}
         pipeline_revision   = ${workflow.revision ?: 'n/a'}
         commit_id           = ${workflow.commitId ?: 'n/a'}
+        git_describe        = ${gitDescribe()}
+        code_checksum       = ${codeChecksum()}
+        project_dir         = ${workflow.projectDir}
+        launch_dir          = ${workflow.launchDir}
+        work_dir            = ${workflow.workDir}
+        profile             = ${workflow.profile}
+        container           = ${containerText()}
         command_line        = ${workflow.commandLine}
 
-        kmer_size           = ${params.kmer_size}
+        kmer_size           = ${kmerSizeText()}
         num_bins            = ${params.num_bins}
-        min_kmer_count      = ${params.min_kmer_count}
+        min_kmer_count      = ${minCountText()}
         threshold           = ${params.threshold}
         keep_kmer_counts    = ${params.keep_kmer_counts}
         delimiter           = ${params.delimiter}
@@ -234,25 +341,52 @@ def writeManifest(String accessions_file, String data_dir, int n_accessions) {
 
         accessions_file     = ${accessions_file}
         n_accessions        = ${n_accessions}
-        data_dir            = ${data_dir}
+        input_mode          = ${params.input_mode}
+        kmc_allow_mixed     = ${params.kmc_allow_mixed}
+        skip_accession_check = ${params.skip_accession_check}
+        kmc_dir             = ${params.input_mode == 'kmc' ? file(params.kmc_dir ?: data_dir).toAbsolutePath().toString() : 'n/a (reads mode)'}
+        data_dir            = ${dataDirText(data_dir)}
         output_dir          = ${params.output_dir}
 
-        # Stage 1 output lives in kmer_count_k${params.kmer_size}/ — bin files store
-        # fixed-width ${params.kmer_size}-mers and cannot be read at any other k.
+        # Stage 1 packs live in kmer_count_k${params.kmer_size}/. Each pack records
+        # its k (${params.kmer_size}) and is rejected by a reader built for any other k.
+        # pack_stats.tsv lists the metadata of every pack${params.input_mode == 'kmc' ? ';\n        # kmc_databases.tsv lists the header of every KMC database' : ''}.
         """.stripIndent()
+}
+
+// Sets the manifest status and adds the completion section. Only the manifest
+// written by this run is changed: a run that stops before writing its own
+// manifest leaves an earlier run's manifest as it is.
+def writeCompletion() {
+    try {
+        def f = new File("${params.output_dir}/run_manifest.txt")
+        if (!f.isFile()) return
+        def text = f.text
+        if (!(text =~ /(?m)^run_name\s+= ${java.util.regex.Pattern.quote(workflow.runName)}$/)) return
+        def status = workflow.success ? 'success' : 'failed'
+        def err    = workflow.success ? null : (workflow.errorMessage ?: '').readLines().find { it.trim() }?.trim()
+        def lines  = [
+            '',
+            '# Completion',
+            "status              = ${status}",
+            "completed           = ${workflow.complete}",
+            "duration            = ${workflow.duration}",
+            "cpu_hours           = ${workflow.stats.computeTimeFmt}",
+            "tasks               = ${workflow.stats.succeededCount} succeeded, ${workflow.stats.cachedCount} cached, ${workflow.stats.failedCount} failed",
+        ]
+        if (!workflow.success) lines << "error               = ${err ?: 'n/a'}"
+        f.text = text.replaceFirst(/(?m)^status(\s+)= running$/, "status\$1= ${status}") + lines.join('\n') + '\n'
+    } catch (Exception e) { log.warn "Could not add the completion section to run_manifest.txt: ${e.message}" }
 }
 
 // ---------------------------------------------------------------------------
 // Completion summary
 // ---------------------------------------------------------------------------
 workflow.onComplete {
-    // NB: work-dir cleanup is handled by the native `cleanup` directive in
-    // nextflow.config (cleanup = params.cleanup), which is symlink-safe. Do NOT
-    // reintroduce `file(workflow.workDir).deleteDir()` here: MATRIX_MERGE stages
-    // the published kmer_count_k<k>/ directory into its work dir as a symlink
-    // (path(kmer_dir)), and Groovy's deleteDir() follows that directory symlink
-    // — recursing into results/ and deleting the real .kbin packs. That was the
-    // cause of the data loss where --cleanup true wiped kmer_count_k*/*.kbin.
+    writeCompletion()
+    // Work-dir cleanup is handled by the native `cleanup` directive in
+    // nextflow.config (cleanup = params.cleanup), which is safe for the
+    // symlinked publish directories used by MATRIX_MERGE.
     def c_reset  = "\033[0m"
     def c_banner = workflow.success ? "\033[1;36m" : "\033[1;31m"  // bold cyan or bold red
     def c_head   = "\033[1;33m"                                     // bold yellow
@@ -284,11 +418,54 @@ workflow.onComplete {
 workflow {
 
 
-    // -- Validate k up front -------------------------------------------------
-    // k is compiled in as -DKMER_K, so an invalid value would otherwise surface
-    // as a static_assert failure inside every SLURM job rather than here.
-    // k must be odd (an even k lets a sequence be its own reverse complement,
-    // making the canonical form ambiguous) and fit two 64-bit words.
+    // The packs record the version in src/version.hpp; it must match the manifest.
+    def version_hpp = new File("${params.src_dir}/version.hpp")
+    def src_version = null
+    if (version_hpp.exists()) {
+        def m = version_hpp.text =~ /KMER_GWAS_VERSION\s+"([^"]+)"/
+        if (m.find()) src_version = m.group(1)
+    }
+    if (src_version != workflow.manifest.version)
+        exit 1, "ERROR: ${version_hpp} gives version ${src_version}, but manifest.version in " +
+                "nextflow.config is ${workflow.manifest.version}. They must match."
+
+    if (params.min_kmer_count != null &&
+        !(params.min_kmer_count.toString().isInteger() && (params.min_kmer_count as Integer) in 1..65535))
+        exit 1, "ERROR: --min_kmer_count must be a whole number from 1 to 65535 (got '${params.min_kmer_count}')."
+
+    if (!(params.input_mode in ['reads', 'kmc']))
+        exit 1, "ERROR: --input_mode must be 'reads' or 'kmc' (got '${params.input_mode}')."
+
+    // Resolve k. Reads mode: --kmer_size is required. kmc mode: k is fixed by the
+    // databases; nextflow.config reads it from the first accession's .kmc_pre into
+    // kmc_detected_kmer_size and adopts it when --kmer_size was not given, so an
+    // explicit --kmer_size must match it. A database of a different k is caught by
+    // its own conversion job, which aborts on a k mismatch.
+    if (params.input_mode == 'kmc') {
+        def kdir = params.kmc_dir ?: params.data_dir
+        def fmt  = params.kmc_detected_format
+        if (params.kmc_detected_kmer_size == null && params.kmer_size == null && fmt != null && fmt != 0x200)
+            exit 1, "ERROR: cannot read the k-mer size from this KMC database format " +
+                    "(0x${Long.toHexString(fmt as long)}; only KMC2 format 0x200 is read). Give --kmer_size."
+        def reason = params.kmc_detect_error ?: "no KMC database header read in ${kdir}"
+        if (params.kmc_detected_kmer_size == null && params.kmer_size == null)
+            exit 1, "ERROR: could not read the k-mer size from the KMC databases. ${reason}. Expected " +
+                    "<kmc_dir>/<accession>.kmc_pre and .kmc_suf for the first accession in ${params.accessions_file}."
+        if (params.kmc_detected_kmer_size == null)
+            log.warn "Could not read the k-mer size from the KMC databases (${reason}); using --kmer_size " +
+                     "${params.kmer_size}. A database built at another k will abort in its conversion job."
+        else if ((params.kmer_size as Integer) != (params.kmc_detected_kmer_size as Integer))
+            exit 1, "ERROR: --kmer_size ${params.kmer_size} does not match the KMC databases " +
+                    "(k=${params.kmc_detected_kmer_size}). Omit --kmer_size, or set it to ${params.kmc_detected_kmer_size}."
+    } else if (params.kmer_size == null) {
+        exit 1, "ERROR: --kmer_size is required (an ODD number between 15 and 63, e.g. --kmer_size 51)."
+    }
+
+    // Validate k up front. k is compiled in as -DKMER_K, so an invalid value
+    // would otherwise surface as a static_assert failure inside every SLURM job
+    // rather than here. k must be odd (an even k lets a sequence be its own
+    // reverse complement, making the canonical form ambiguous) and fit two
+    // 64-bit words.
     def kmer_size = params.kmer_size as Integer
     if (kmer_size % 2 == 0 || kmer_size < 15 || kmer_size > 63) {
         exit 1, "ERROR: --kmer_size must be an ODD number between 15 and 63 (got ${params.kmer_size})"
@@ -305,10 +482,9 @@ workflow {
     if (params.encoding == 'text' && params.delimiter == 'none' && params.keep_kmer_counts == 'y')
         exit 1, "ERROR: --delimiter none cannot be combined with --keep_kmer_counts y (multi-digit counts would be unparseable). Use --delimiter tab or space."
 
-    // Validate the publish mode, and for 'link' fail here if output_dir and the
-    // work dir are on different filesystems. A hard link cannot cross filesystems,
-    // so Nextflow would otherwise fail the FIRST pack publish mid-run with a
-    // cryptic error; this stops at launch with the fix (use copy).
+    // Validate the publish mode. For 'link', fail here if output_dir and the
+    // work dir are on different filesystems: hard links cannot cross filesystems,
+    // so this check avoids a mid-run failure with a clearer error and fix.
     if (!(params.kmer_count_publish_mode in ['link', 'copy', 'move']))
         exit 1, "ERROR: --kmer_count_publish_mode must be 'link', 'copy' or 'move' (got '${params.kmer_count_publish_mode}')."
     if (!(params.matrix_publish_mode in ['link', 'copy', 'move']))
@@ -331,10 +507,9 @@ workflow {
                     "or point --output_dir at the same filesystem as the work dir."
     }
 
-    // --compress_kbin_packs only reclaims space if the uncompressed packs are
-    // actually gone. With kmer_count_publish_mode 'link' + cleanup=false the pack survives as
-    // a hard link in the work dir, so compressing the published copy only ADDS the
-    // .gz until the work dir is removed. Warn rather than fail (option (a)).
+    // With --kmer_count_publish_mode link and --cleanup false, the uncompressed
+    // packs remain hard-linked in the work dir, so --compress_kbin_packs does not
+    // reclaim space until the work dir is removed. A warning is issued in this case.
     if (params.compress_kbin_packs && params.kmer_count_publish_mode == 'link' && !params.cleanup)
         log.warn "--compress_kbin_packs is on, but with --kmer_count_publish_mode link and --cleanup false " +
                  "the uncompressed packs remain hard-linked in the work dir, so no space is " +
@@ -344,13 +519,18 @@ workflow {
     // containers and SLURM work directories
     def accessions_file = file(params.accessions_file).toAbsolutePath().toString()
     def data_dir        = file(params.data_dir).toAbsolutePath().toString()
+    def kmc_dir         = file(params.kmc_dir ?: params.data_dir).toAbsolutePath().toString()
+    // Absolute because Stage 2 and COMPRESS_PACKS receive the pack directory as a
+    // path string and run inside their own work directories.
+    def output_dir      = file(params.output_dir).toAbsolutePath().toString()
 
     paramSummary(accessions_file, data_dir)
 
     def n_accessions = file(accessions_file).readLines().findAll { it.trim() }.size()
     writeManifest(accessions_file, data_dir, n_accessions)
 
-    // -- Stage 1: k-mer counting, one job per accession --
+    // -- Stage 1: one pack per accession, counted from reads or converted from a
+    //    KMC database. Both processes emit the same (accession, pack) tuples. --
     ch_accessions = Channel
         .fromPath(params.accessions_file)
         .splitText()
@@ -361,22 +541,44 @@ workflow {
     // directory ships with the tool needed to read its bit-packed matrices.
     BUILD_TOOLS()
 
-    KMER_COUNT(ch_accessions, params.num_bins, data_dir)
+    if (params.input_mode == 'kmc') {
+        // Check every database header first; the conversions start only after
+        // the check has passed.
+        KMC_HEADERS(file(accessions_file), kmc_dir)
+        KMC_HEADERS.out.notes
+            .splitText().map { it.trim() }.filter { it }
+            .subscribe { it.startsWith('WARNING:') ? log.warn(it - 'WARNING: ') : log.info(it - 'NOTE: ') }
+        ch_checked = ch_accessions.combine(KMC_HEADERS.out.table).map { acc, table -> acc }
+        KMC_TO_PACK(ch_checked, params.num_bins, kmc_dir)
+        ch_packs = KMC_TO_PACK.out.accession_pack
+        ch_stats = KMC_TO_PACK.out.stats
+    } else {
+        KMER_COUNT(ch_accessions, params.num_bins, data_dir)
+        ch_packs = KMER_COUNT.out.accession_pack
+        ch_stats = KMER_COUNT.out.stats
+    }
 
-    // -- Fan-in: wait for ALL accessions, then fire once per bin --
-    //
-    // Strategy: each finished accession emits num_bins sentinel tuples
-    // (bin_idx, kmer_count_root). groupTuple() collects one entry per
-    // accession for every bin_idx; the channel only closes (and each bin
-    // fires) once all accessions have completed Stage 1.
-    //
-    // Must match KMER_COUNT's publishDir exactly — k is part of the path so that
-    // a results directory from a previous run at a different k cannot be picked
-    // up silently.
-    def kmer_count_root = "${params.output_dir}/kmer_count_k${params.kmer_size}"
+    // One table with the metadata of every pack, written when Stage 1 is done,
+    // with the rows in the order of the accessions file.
+    def acc_order = [:]
+    file(accessions_file).readLines()*.trim().findAll { it }.eachWithIndex { a, i -> acc_order[a] = i }
+    ch_stats
+        .collectFile(name: 'pack_stats.tsv', storeDir: output_dir, keepHeader: true,
+                     sort: { f -> acc_order.get(f.name - ~/\.pack_stats\.tsv$/, Integer.MAX_VALUE) })
+        .subscribe { logPackSummary(it) }
+
+    // Fan-in: wait for all accessions, then fire once per bin. Each finished
+    // accession emits num_bins sentinel tuples (bin_idx, kmer_count_root).
+    // groupTuple() collects one entry per accession for every bin_idx; the
+    // channel only closes (and each bin fires) once all accessions have
+    // completed Stage 1.
+    // Must match the Stage 1 publishDir exactly (KMER_COUNT and KMC_TO_PACK use
+    // the same one) — k is part of the path so that a results directory from a
+    // previous run at a different k cannot be picked up silently.
+    def kmer_count_root = "${output_dir}/kmer_count_k${params.kmer_size}"
     def n_bins          = params.num_bins as Integer
 
-    ch_bin_signals = KMER_COUNT.out.accession_pack
+    ch_bin_signals = ch_packs
         .flatMap { accession, pack ->
             (0..<n_bins).collect { bin_idx ->
                 tuple(bin_idx, kmer_count_root)
@@ -405,7 +607,7 @@ workflow {
     //    a pack is never compressed while it might still be read. See the module.
     if (params.compress_kbin_packs) {
         ch_gate = MATRIX_MERGE.out.matrix_file.collect().map { true }
-        ch_accs = KMER_COUNT.out.accession_pack.map { acc, pack -> acc }
+        ch_accs = ch_packs.map { acc, pack -> acc }
         COMPRESS_PACKS(ch_accs.combine(ch_gate), kmer_count_root)
     }
 }
