@@ -4,6 +4,53 @@ All notable changes to this pipeline are documented here.
 Versions follow [semantic versioning](https://semver.org): the major number is
 bumped when output or interfaces change in a backwards-incompatible way.
 
+## v4.1.0
+
+Reworks the execution profiles, fixes Stage 1 on workstations, and adds progress
+lines. Matrices are byte-identical to v4.0.0.
+
+### Changed
+
+- **Execution profiles combine an executor with an optional container engine**:
+  `-profile local` or `slurm`, optionally with `singularity`, `apptainer`,
+  `docker` or `podman`, e.g. `-profile slurm,singularity` or `-profile
+  local,docker`. With no `-profile`, the run uses `local`. The run stops if
+  `-profile` selects two executors, two engines, or an engine without an
+  executor. The settings are in `conf/` (`base.config`, `local.config`,
+  `slurm.config`, `container.config`).
+- **`local`** sizes its task pool from the CPUs and memory this process may use
+  (SLURM allocation, cgroup), capped at `--max_cpus` and `--max_memory`. It has
+  no time limits and no retries.
+- **The banner and `run_manifest.txt`** show the executor, the container engine,
+  and the CPUs and memory each stage requests, with the cap that applies. A
+  setting the profile does not use shows `n/a`. The manifest also lists the
+  container mounts, and its code checksum includes `conf/`.
+- **Nextflow 24.04 or later** is required.
+- A `-resume` of a v4.0.0 run re-runs Stage 1.
+
+### Added
+
+- **`--kmer_count_cpus`** (default 32): CPUs for each `KMER_COUNT` task.
+- **Progress lines**: `kmer_count` and `kmc_to_pack` write one line every
+  10 minutes (reads or k-mers done, spills, bins finalized, elapsed time).
+  `KMER_GWAS_PROGRESS_SEC` changes the interval; `0` turns it off.
+- `kmc_to_pack` logs its memory limit and budget.
+
+### Fixed
+
+- **Stage 1 runs out of memory with the local executor.** Tasks share one
+  machine with no per-task limit, so each `kmer_count` sized its budget from the
+  whole machine. With `local`, the budget now uses the task's memory request.
+- **Stage 1 fails to link on Debian/Ubuntu** (`undefined reference to
+  'gzclose'`): the zlib library is now given after the source.
+- **`kmer_count` started one thread per CPU of the node**, not per CPU of the
+  task. It now uses the task's CPUs.
+- CPUs and memory set in a `-c` config file now apply to the tasks.
+
+### Removed
+
+- The `slurm_container` profile. Use `-profile slurm,singularity`.
+
 ## v4.0.0
 
 Adds a second Stage 1 input, existing KMC databases, and records metadata in each
