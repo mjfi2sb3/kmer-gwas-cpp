@@ -23,26 +23,33 @@ A high-performance Nextflow pipeline for generating genome-wide k-mer matrices f
 
 ## Overview
 
-For each accession, the pipeline streams sequencing reads, extracts canonical *k*-mers, and writes a self-indexed binary pack containing sorted k-mer slices. A second stage seeks directly to the corresponding slice in every pack and performs a k-way merge to produce the matrix.
+For each accession, Stage 1 counts canonical *k*-mers from paired sequencing reads, or takes them from an existing KMC database, and writes a self-indexed binary pack containing sorted k-mer slices. Stage 2 seeks directly to the corresponding slice in every pack and performs a k-way merge to produce the matrix.
 
 The output contains one row per distinct k-mer and one column per accession. It can encode either presence/absence or per-accession k-mer counts for downstream association analysis.
 
 ### Pipeline stages
 
-1. **KMER_COUNT** processes one accession per job, streams its reads, counts canonical k-mers, and writes `<accession>.kbin`. With `--input_mode kmc`, **KMC_TO_PACK** replaces it and converts an existing KMC database into the same `<accession>.kbin`.
+1. **Stage 1 builds one pack per accession** from one of two inputs:
+   - **KMER_COUNT** (reads mode, the default) streams the accession's paired read files (R1 and R2; FASTQ or FASTA, plain or gzip-compressed), counts canonical k-mers, and writes `<accession>.kbin`.
+   - **KMC_TO_PACK** (`--input_mode kmc`) reads the accession's KMC database and writes the same `<accession>.kbin`.
+
+   Both write the same pack format, so Stage 2 does not depend on the input.
 2. **MATRIX_MERGE** processes bins in parallel, merges the sorted slices from all accession packs, applies the optional MAF filter, and writes compressed matrix files.
 
 ### Key features
 
+- Two Stage 1 inputs: paired reads (FASTQ or FASTA, plain or gzip-compressed) or pre-built KMC databases.
 - Canonical k-mers only: a k-mer and its reverse complement are counted as one k-mer, stored as the smaller of the two (A<C<G<T order).
+- Any odd k-mer length from 15 to 63.
 - Streaming input without loading complete read sets into memory.
 - Configurable Stage 1 memory budgeting with spill-to-disk support.
-- One self-indexed pack per accession instead of per-bin directory trees.
+- One self-indexed pack per accession instead of per-bin directory trees. Each pack records its accession, input, versions and statistics, and Stage 2 checks the accession.
 - Stage 2 memory proportional primarily to the number of accessions.
 - Runtime compilation with `-march=native` for the executing node.
-- Singularity/Apptainer support with a containerised GCC, zlib, and pigz toolchain.
+- Runs on a local machine or on SLURM, with the host compiler or in a container (Singularity, Apptainer, Docker or Podman) that supplies GCC, zlib-ng and pigz.
 - Presence/absence, raw-count, and bit-packed matrix output.
 - Optional extraction of k-mers present in every accession.
+- A run record (`run_manifest.txt`: parameters, code checksum, container, completion status) and per-accession statistics (`pack_stats.tsv`).
 - Nextflow caching and `-resume` support.
 
 ### Benchmark and compatibility
@@ -55,12 +62,10 @@ K-mers composed entirely of `A` bases are valid and are retained. Only windows c
 
 | Component | Requirement |
 |---|---|
-| Nextflow | 23.x or later, DSL2 |
-| Singularity or Apptainer | Required for `slurm_container` |
-| SLURM | Required for `slurm_container` and `slurm` |
-| C++17 compiler and zlib development files | Required for the host-based `slurm` profile and local builds |
-
-The `slurm_container` profile supplies the compiler and libraries through the container.
+| Nextflow | 24.04 or later, DSL2 |
+| Container engine: Singularity, Apptainer, Docker or Podman | Optional. Supplies GCC 12, zlib-ng and pigz. |
+| SLURM | Required for the `slurm` profile |
+| GCC 12 or later (C++17), zlib development files, pigz | Required when no container profile is used |
 
 ## Quick start
 
@@ -75,7 +80,7 @@ Run the recommended profile:
 
 ```bash
 nextflow run main.nf \
-    -profile slurm_container \
+    -profile slurm,singularity \
     --accessions_file accessions.txt \
     --kmer_size 51 \
     --data_dir /path/to/fastq
@@ -91,7 +96,7 @@ For clusters requiring an account or partition:
 
 ```bash
 nextflow run main.nf \
-    -profile slurm_container \
+    -profile slurm,singularity \
     --accessions_file accessions.txt \
     --kmer_size 51 \
     --data_dir /path/to/fastq \
@@ -132,7 +137,9 @@ If either mate is missing, the relevant accession job fails with an error identi
 
 ### KMC databases
 
-If the reads are not available, Stage 1 can start from pre-built KMC databases. Use `--input_mode kmc`. Each accession needs one database in `--kmc_dir` (default: `--data_dir`):
+[KMC](https://github.com/refresh-bio/KMC) is a k-mer counter. For each sample it writes a database of two files that holds the sample's k-mers and their counts. With `--input_mode kmc`, Stage 1 uses these databases instead of reads. Use this mode when the k-mers were already counted with KMC: for example, when the reads are archived or no longer available, or to reuse existing KMC results.
+
+Each accession needs one database in `--kmc_dir` (default: `--data_dir`):
 
 ```text
 <accession>.kmc_pre
@@ -141,20 +148,27 @@ If the reads are not available, Stage 1 can start from pre-built KMC databases. 
 
 ```bash
 nextflow run main.nf \
-    -profile slurm_container \
+    -profile slurm,singularity \
     --accessions_file accessions.txt \
     --input_mode kmc \
     --kmc_dir /path/to/kmc_dbs
 ```
 
-The pipeline reads the k-mer length from the first accession's database, so `--kmer_size` is not required. If you give `--kmer_size` and it differs from the databases, the run stops. A database built with a different k-mer length fails its job.
+Both input modes write the same pack format, so Stage 2 and the matrices do not change. KMC does not need to be installed: the pipeline includes the KMC 3.2.4 API and reads the database files directly (KMC1 and KMC2 formats).
 
-The conversion produces the same packs as reads mode, so Stage 2 and the output are unchanged. KMC does not need to be installed; only the database files are read. The pipeline includes the KMC 3.2.4 API. It reads KMC1-format and KMC2-format databases. Databases built with `-cs1` or `kmc_tools compact` store no real counts. They give correct presence/absence matrices; with `--keep_kmer_counts y`, every count is 1. A database stores counts up to its `-cs` value. `pack_stats.tsv` gives this as `count_limit`: 65535 for a counter of 2 or more bytes, 255 for a 1-byte counter (the KMC default `-cs255`; KMC does not record a smaller `-cs`, so 255 is an upper limit), and 1 for a database with no counter. `kmers_at_count_limit` counts the k-mers that reached it, and the coverage estimate leaves them out.
+**k-mer length.** KMC fixes the k-mer length when it builds a database. The pipeline reads it from the first accession's database, so `--kmer_size` is optional. If you give `--kmer_size`, it must be the same as in the database, or the run stops. A database with a different k-mer length from the others fails its job. To use a different k-mer length, build new databases from the reads with KMC (`kmc -k<k>`). A database cannot be converted to another k-mer length.
 
-- Both modes produce canonical k-mers only. A `-b` (non-canonical) database is converted to canonical k-mers, and the counts of a k-mer and its reverse complement are added together.
-- Each database is kept as it is: every k-mer in it is used, and the `-ci` used to build it is the count filter. `--min_kmer_count` is applied only where it is larger than a database's `-ci`. If a database's counts never reach it (for example, a database built with `-cs1`), the job stops.
-- A `-b` database built with `-ci` greater than 1 can be missing k-mers whose count was split between the two strands. The job writes a warning.
-- Before any conversion, the pipeline reads every database header and writes `kmc_databases.tsv`. The run stops if the databases differ in k-mer length, `-ci` or `-cx` (or in counter size with `--keep_kmer_counts y`). `--kmc_allow_mixed true` turns this into a warning. A `--min_kmer_count` equal to or larger than every database's `-ci` makes different `-ci` values consistent.
+**KMC build options.** The options used to build a database change what the pipeline receives:
+
+| KMC option | In KMC | In this pipeline |
+|---|---|---|
+| `-ci<n>` | Removes k-mers seen fewer than *n* times | This is the count filter for the accession. `--min_kmer_count` is applied in addition only when it is larger than *n*. If no k-mer reaches it, the job stops. |
+| `-cx<n>` | Removes k-mers seen more than *n* times | These k-mers are absent from the accession. |
+| `-cs<n>` | Stores counts up to *n* | Higher counts are stored as *n*. Presence/absence matrices are not affected. Count matrices (`--keep_kmer_counts y`) show at most *n*. |
+| `-cs1`, or `kmc_tools compact` | Keeps the k-mers but no counts | Presence/absence matrices are correct. In a count matrix every value is 1, so use these databases for presence/absence only. |
+| `-b` | Counts each strand separately (non-canonical k-mers) | The pipeline joins each k-mer with its reverse complement and adds their counts. With `-ci` greater than 1, a k-mer whose count was split between the two strands can be missing. The job writes a warning. |
+
+**Consistency check.** Before any conversion, the pipeline reads every database header and writes `kmc_databases.tsv`. It has one row per accession: k-mer length, `-ci`, `-cx`, counter size, format and number of distinct k-mers. The run stops if the databases differ in k-mer length, `-ci` or `-cx` (or in counter size with `--keep_kmer_counts y`), because the accessions would then be filtered differently. `--kmc_allow_mixed true` changes this to a warning. A `--min_kmer_count` equal to or larger than every database's `-ci` applies one filter to all accessions, so different `-ci` values are then accepted.
 
 ## Output
 
@@ -182,9 +196,25 @@ The core-k-mer file is produced only when `--write_core_kmers true` is enabled. 
 
 Each `.kbin` file contains sorted bin slices and an index for direct seeking. Packs are uncompressed during processing and can optionally be compressed after both stages with `--compress_kbin_packs true`.
 
-Each pack records its metadata: accession, source (`reads` or `kmc`), the count filter applied, the pipeline and KMC API versions, and statistics (distinct k-mers, total k-mers, largest count, estimated k-mer coverage, and, in reads mode, reads, bases and skipped windows). `kbin_dump --info` prints it. `pack_stats.tsv` lists the metadata of every pack, and the log shows a short summary when Stage 1 finishes. Stage 2 stops if a pack's recorded accession differs from its file name.
+Each pack also records its metadata: the accession, the input mode (`reads` or `kmc`), the count filter and its source, the pipeline and KMC API versions, and statistics. `kbin_dump --info` prints the metadata of one pack, and the log shows a short summary when Stage 1 finishes. Stage 2 stops if a pack's recorded accession differs from its file name (`--skip_accession_check true` allows this).
 
-`run_manifest.txt` records how the results directory was made: the parameters, the command line, the profile, the container image, and a `code_checksum`. The checksum is one MD5 over `main.nf`, `nextflow.config`, `modules/` and the C++ sources, so two runs used the same code only if their checksums are the same. The manifest is written at launch with `status = running`, and a completion section (status, duration, CPU hours, task counts and, on failure, the error) is added when the run ends.
+`pack_stats.tsv` lists the metadata of every pack: one row per accession, in the order of the accession file, with the same columns in both input modes. A column that does not apply to a mode contains `NA`.
+
+| Columns | Meaning |
+|---|---|
+| `accession`, `input_mode`, `created_by` | The accession; `reads` or `kmc`; the program that wrote the pack (`kmer_count` or `kmc_to_pack`) |
+| `pipeline_version`, `kmc_api_version` | The versions used (`kmc_api_version` is `NA` in reads mode) |
+| `kmer_size`, `canonical_kmers`, `num_bins` | The pack layout |
+| `min_kmer_count`, `min_kmer_count_source` | The count filter, and where it came from: `default` or `given` (reads mode), `database` (the database's own `-ci`), or `enforced` (`--min_kmer_count` is larger than the database's `-ci`) |
+| `count_limit`, `kmers_at_count_limit` | The largest count the input can store, and the number of k-mers at that count. The limit is 65535 in reads mode. For a KMC database it depends on the counter size in the database: 65535 for 2 bytes or more, 255 for 1 byte, and 1 for no counter. For 1 byte, 255 is an upper limit, because KMC does not record a smaller `-cs`. |
+| `input_reads`, `input_bases`, `skipped_kmers_non_acgt` | The reads and bases read, and the k-mer positions skipped because they contain a base other than A, C, G or T (reads mode only) |
+| `distinct_kmers_before_filter`, `distinct_kmers_after_filter` | The number of distinct k-mers before and after the count filter |
+| `kmer_occurrences_after_filter` | The sum of the counts of the kept k-mers |
+| `max_count_per_kmer` | The largest count of one k-mer |
+| `estimated_kmer_coverage` | The count that has the most distinct k-mers, after the low-count peak of sequencing errors. K-mers at `count_limit` are not used. `NA` if there is no such peak. |
+| `kmers_in_smallest_bin`, `kmers_in_largest_bin` | The number of k-mers in the smallest and the largest bin (bin balance) |
+
+`run_manifest.txt` records how the results directory was made: the parameters, the command line, the profile with its executor and container engine, the container image, and the CPUs and memory each stage requested. A setting that the profile does not use shows `n/a`, for example the time limits with the `local` executor. The manifest also records a `code_checksum`. The checksum is one MD5 over `main.nf`, `nextflow.config`, `conf/`, `modules/` and the C++ sources, so two runs used the same code only if their checksums are the same. The manifest is written at launch with `status = running`, and a completion section (status, duration, CPU hours, task counts and, on failure, the error) is added when the run ends.
 
 ## Parameters
 
@@ -205,9 +235,10 @@ Each pack records its metadata: accession, source (`reads` or `kmc`), the count 
 | `--encoding` | `text` | `text` or `bits`; bit encoding is for presence/absence only. |
 | `--delimiter` | `none` | Text value delimiter: `none`, `tab`, or `space`. |
 | `--write_core_kmers` | `false` | Write k-mers present in every accession to a separate file. |
+| `--kmer_count_cpus` | `32` | CPUs and worker threads per KMER_COUNT job. |
 | `--matrix_merge_cpus` | `16` | Threads used by MATRIX_MERGE. |
 | `--kmer_count_memory` | `128.GB` | Scheduler memory request per KMER_COUNT and KMC_TO_PACK job. |
-| `--kmer_count_budget_gb` | `0` | Stage 1 accumulation budget. `0` uses 70% of the detected enforced memory limit. |
+| `--kmer_count_budget_gb` | `0` | Stage 1 accumulation budget. `0` uses 70% of the task's memory limit: the SLURM job limit with `slurm`, or the task's memory request (`--kmer_count_memory`) with `local`. |
 | `--kmer_count_read_threads` | `2` | Concurrent read/decompression threads. |
 | `--matrix_merge_memory` | `16.GB` | Memory request per MATRIX_MERGE job. |
 | `--kmer_count_time` | `5h` | Wall-clock limit per KMER_COUNT and KMC_TO_PACK job. |
@@ -218,6 +249,10 @@ Each pack records its metadata: accession, source (`reads` or `kmc`), the count 
 | `--compress_kbin_packs` | `false` | Compress published `.kbin` files after both stages finish. |
 | `--clusterOptions` | none | Additional SLURM options passed to jobs. |
 | `--queue_size` | `200` | Maximum queued and running jobs submitted by SLURM. |
+| `--max_retries` | `2` | Extra attempts for a job that failed because it ran out of memory or time (`slurm` only). Each attempt gets the base memory and time multiplied by the attempt number. `0` disables retries. |
+| `--max_cpus` | `64` | Largest CPU request for one job. With `local`, also the most CPUs the run uses. |
+| `--max_memory` | `512.GB` | Largest memory request for one job. With `local`, also the most memory the run uses. |
+| `--max_time` | `24h` | Largest time limit for one job (`slurm` only). |
 | `--singularity_cache_dir` | `./.singularity` | Singularity/Apptainer image cache directory. |
 
 Because `--clusterOptions` begins with a hyphen, use the equals form:
@@ -225,6 +260,8 @@ Because `--clusterOptions` begins with a hyphen, use the equals form:
 ```bash
 --clusterOptions='--account=myproject --partition=highmem'
 ```
+
+Most parameters can also be set in a config file given with `-c`. `--max_retries`, `--queue_size`, `--max_cpus`, `--max_memory`, `--max_time` and `--clusterOptions` are read before that file is applied, so set them on the command line or in a `-params-file`.
 
 ### K-mer length
 
@@ -278,7 +315,7 @@ Example:
 ```bash
 # Initial run
 nextflow run main.nf \
-    -profile slurm_container \
+    -profile slurm,singularity \
     --cleanup false \
     --kmer_count_publish_mode link \
     --matrix_publish_mode link \
@@ -288,7 +325,7 @@ nextflow run main.nf \
 
 # Resume after a failure or interruption
 nextflow run main.nf \
-    -profile slurm_container \
+    -profile slurm,singularity \
     -resume \
     --cleanup false \
     --kmer_count_publish_mode link \
@@ -300,48 +337,41 @@ nextflow run main.nf \
 
 ## Execution profiles
 
-### `slurm_container`
+Select one executor and, optionally, one container engine, separated by a comma:
 
-The recommended SLURM profile. It uses a pre-built Singularity/Apptainer image and does not require compiler or zlib modules on compute nodes.
+| Executor | Runs tasks |
+|---|---|
+| `local` | On this machine. This is the default when no `-profile` is given. |
+| `slurm` | As SLURM jobs, with time limits, and retries with more memory and time after an out-of-memory or time-out failure. |
 
-| Stage | CPUs | Memory | Time |
+| Container engine | Use |
+|---|---|
+| `singularity`, `apptainer` | HPC clusters |
+| `docker`, `podman` | Workstations and cloud machines |
+| (none) | The host supplies GCC 12 or later, zlib and pigz. |
+
+```bash
+-profile slurm,singularity     # HPC (recommended)
+-profile local,docker          # workstation
+-profile local                 # host compiler, small tests
+```
+
+The container image is published at `ghcr.io/mjfi2sb3/kmer-gwas-cpp:<version>`. It is a toolchain only: each job compiles the source in your checkout with `-march=native` inside the container. The image is built for x86-64; on an ARM computer (for example Apple silicon), Docker runs it slowly through emulation.
+
+With `local`, the tasks share the CPUs and memory of the machine or of the SLURM allocation that runs Nextflow, capped at `--max_cpus` and `--max_memory`. A request larger than that runs with what is available.
+
+A task starts only when its CPUs and memory are free in this pool. With the default `--kmer_count_cpus 32` on a machine with 32 CPUs, one accession runs at a time. `kmer_count` decompresses each input file with one thread, so a task does not always use all of its CPUs. To run two accessions at once, set `--kmer_count_cpus` to half the CPUs, for example `--kmer_count_cpus 16`. This needs memory for two tasks (2 × `--kmer_count_memory`); if there is not enough, the second task waits. This can finish more accessions per hour. The results do not change.
+
+Resources per job:
+
+| Process | CPUs | Memory | Time (`slurm` only) |
 |---|---:|---:|---:|
-| KMER_COUNT | 32 | `128.GB` | `5h` |
-| KMC_TO_PACK | 2 | `128.GB` | `5h` |
-| MATRIX_MERGE | 16 | `16.GB` | `10h` |
+| KMER_COUNT | `--kmer_count_cpus` (32) | `--kmer_count_memory` (128 GB) | `--kmer_count_time` (5 h) |
+| KMC_TO_PACK | 2 | `--kmer_count_memory` | `--kmer_count_time` |
+| MATRIX_MERGE | `--matrix_merge_cpus` (16) | `--matrix_merge_memory` (16 GB) | `--matrix_merge_time` (10 h) |
+| COMPRESS_PACKS | `--matrix_merge_cpus` | 4 GB | `--matrix_merge_time` |
 
-### `slurm`
-
-Uses the host environment on SLURM and requires GCC 12 or later, zlib development files, and pigz where available.
-
-```bash
-nextflow run main.nf \
-    -profile slurm \
-    --accessions_file accessions.txt \
-    --kmer_size 51 \
-    --data_dir /path/to/fastq
-```
-
-### `standard`
-
-Runs locally and is intended for small-scale testing.
-
-```bash
-nextflow run main.nf \
-    -profile standard \
-    --accessions_file accessions.txt \
-    --kmer_size 51 \
-    --data_dir /path/to/fastq \
-    --num_bins 5
-```
-
-The container image is published at:
-
-```text
-ghcr.io/mjfi2sb3/kmer-gwas-cpp:v4.0.0 # check for correct version
-```
-
-It supplies GCC 12, zlib, and pigz as a build toolchain. The source in the checkout is compiled inside the container at job start with `-march=native`.
+Every request is clamped to `--max_cpus`, `--max_memory` and `--max_time`.
 
 ## Matrix formats and utilities
 
@@ -395,10 +425,17 @@ For large cohorts:
 .
 ├── main.nf
 ├── nextflow.config
+├── conf/
+│   ├── base.config
+│   ├── local.config
+│   ├── slurm.config
+│   └── container.config
 ├── modules/
 │   ├── kmer_count.nf
+│   ├── kmc_headers.nf
 │   ├── kmc_to_pack.nf
 │   ├── matrix_merge.nf
+│   ├── compress_packs.nf
 │   └── build_tools.nf
 ├── src/
 │   ├── kmer_count_v3.cpp
@@ -414,6 +451,8 @@ For large cohorts:
 ├── tools/
 │   ├── kbin_dump
 │   ├── bits_to_text
+│   ├── check_kmc_db.sh
+│   ├── test_kmc_to_pack.sh
 │   └── README.md
 ├── Dockerfile
 ├── .gitlab-ci.yml

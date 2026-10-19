@@ -39,22 +39,28 @@ process KMER_COUNT {
     // request and is wrong under --mem=0). Passing 0 selects that AUTO sizing;
     // --kmer_count_budget_gb sets an explicit budget, capped at the enforced
     // limit. See src/mem_limit.hpp.
+    // With the local executor, tasks share one machine with no per-task limit,
+    // so KMER_GWAS_TASK_MEMORY passes the task's memory request as one more limit.
     """
     # Prefer zlib-ng for gzip inflate (~3x faster than stock zlib on FASTQ) when
     # it is available (it is in the container image); fall back to stock zlib so
     # the non-container profiles still build on clusters without it. Probe by
     # actually compiling+linking a tiny program against zlib-ng's gz ops.
-    ZFLAGS="-lz"
+    ZDEF=""
+    ZLIB="-lz"
     if printf '#define WITH_GZFILEOP\\n#include <zlib-ng.h>\\nint main(){ gzFile f=zng_gzopen("","rb"); (void)f; return 0; }\\n' \
          | g++ -x c++ - -lz-ng -o /dev/null 2>/dev/null; then
-        ZFLAGS="-DHAVE_ZLIBNG -lz-ng"
+        ZDEF="-DHAVE_ZLIBNG"
+        ZLIB="-lz-ng"
     fi
 
     # -DKMER_K makes the k-mer length a compile-time constant, so it is
     # user-configurable at no runtime cost (the binary is built per job anyway,
     # to get -march=native for this node's CPU).
-    g++ -std=c++17 -O3 -march=native -pthread -DKMER_K=${params.kmer_size} \$ZFLAGS -o kmer_count \
-        ${params.src_dir}/kmer_count_v3.cpp
+    # The library goes after the source: linkers that use --as-needed (the
+    # default on Debian/Ubuntu) drop a library given before the code that uses it.
+    g++ -std=c++17 -O3 -march=native -pthread -DKMER_K=${params.kmer_size} \$ZDEF -o kmer_count \
+        ${params.src_dir}/kmer_count_v3.cpp \$ZLIB
 
     # Locate R1 — try common extensions in order
     R1=""
@@ -72,6 +78,7 @@ process KMER_COUNT {
     done
     [ -z "\$R2" ] && { echo "ERROR: no R2 file found for ${accession} in ${data_dir}" >&2; exit 1; }
 
-    ./kmer_count ${accession} ${num_bins} ./ "\$R1" "\$R2" ${params.kmer_count_budget_gb} ${params.min_kmer_count != null ? params.min_kmer_count : 2} ${params.kmer_count_read_threads} ${params.min_kmer_count != null ? 'given' : 'default'}
+    ${task.executor == 'local' && task.memory ? "export KMER_GWAS_TASK_MEMORY=${task.memory.toBytes()}" : ''}
+    ./kmer_count ${accession} ${num_bins} ./ "\$R1" "\$R2" ${params.kmer_count_budget_gb} ${params.min_kmer_count != null ? params.min_kmer_count : 2} ${params.kmer_count_read_threads} ${params.min_kmer_count != null ? 'given' : 'default'} ${task.cpus}
     """
 }

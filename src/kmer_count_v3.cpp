@@ -47,6 +47,7 @@
 #include "kmer_key.hpp"
 #include "pack_io.hpp"
 #include "bin_store.hpp"
+#include "progress.hpp"
 // Gzip decompression. zlib-ng's inflate is ~3x faster than stock zlib on FASTQ
 // (measured ~23 s -> ~7 s for a multi-GB mate) and is API-shaped the same, so it
 // is used when available (-DHAVE_ZLIBNG); stock zlib is the portable fallback so
@@ -413,10 +414,10 @@ vector<string> split(const string &str, const char &sep)
 
 int main(int argc, char *argv[])
 {
-   if (argc < 6 || argc > 10)
+   if (argc < 6 || argc > 11)
    {
       cout << "usage: " << argv[0]
-           << " <accession> <num_bins> <output folder path> <R1> <R2> [memory_budget_GB] [min_count] [read_threads] [min_count_source]\n"
+           << " <accession> <num_bins> <output folder path> <R1> <R2> [memory_budget_GB] [min_count] [read_threads] [min_count_source] [threads]\n"
            << "\n"
            << "  Writes <output>/<accession>.kbin — one self-indexed pack file holding\n"
            << "  this accession's canonical " << k << "-mers for every bin.\n"
@@ -436,7 +437,14 @@ int main(int argc, char *argv[])
            << "  seek-thrash; on NVMe / parallel filesystems 2 roughly halves the read phase.\n"
            << "\n"
            << "  min_count_source is recorded in the pack metadata: default or given\n"
-           << "  (default: given when min_count is set, else default).\n";
+           << "  (default: given when min_count is set, else default).\n"
+           << "\n"
+           << "  threads is the number of worker threads that count k-mers and finalize\n"
+           << "  the bins (default: the number of CPUs on the machine). Set it to the CPUs\n"
+           << "  allocated to the job.\n"
+           << "\n"
+           << "  A progress line is written every 600 s. The environment variable\n"
+           << "  KMER_GWAS_PROGRESS_SEC changes the interval; 0 turns it off.\n";
       return -1;
    }
 
@@ -488,11 +496,14 @@ int main(int argc, char *argv[])
 
       const string min_count_source = (argc >= 10) ? string(argv[9]) : (argc >= 8 ? "given" : "default");
 
+      unsigned threads = (argc >= 11) ? (unsigned)max(1, atoi(argv[10])) : thread::hardware_concurrency();
+      if (threads < 1) threads = 1;
+
       cout << "***************************** " << endl;
       cout << "PROCESSING ACCESSION: " << accession << endl;
       cout << "  k = " << k << ", bins = " << NUM_FILES
            << ", record = " << kmer::RECORD_BYTES << " B"
-           << ", min_count = " << min_count << endl;
+           << ", min_count = " << min_count << ", threads = " << threads << endl;
       cout << "  memory: enforced limit = "
            << (limit_gb > 0.0 ? std::to_string((long)limit_gb) + " GB" : string("unknown"))
            << " [" << lim.source << "]" << endl;
@@ -507,13 +518,13 @@ int main(int argc, char *argv[])
       // to a single file only when the budget is exceeded (see bin_store.hpp).
       kmer::BinStore store(NUM_FILES, (size_t)(budget_gb * 1e9), spill_path);
 
-      thread_pool pool;
+      thread_pool pool(threads);
 
       // Cap on batches queued-or-running. Bounds BOTH resident read memory and
       // the number of live per-worker hash maps, which is the larger term on a
       // complex genome (~98 MB per task at BATCH_READS=16384, 150 bp reads).
       // 2x the worker count keeps every thread fed with one batch in reserve.
-      BatchGate gate(max<size_t>(4, 2 * thread::hardware_concurrency()));
+      BatchGate gate(max<size_t>(4, 2 * (size_t)threads));
 
       cout << "Building Kmer index (streaming) ... This will take a while" << endl;
 
@@ -529,6 +540,8 @@ int main(int argc, char *argv[])
       // summed wherever a k-mer occurs.
       atomic<size_t> total_reads{0};
       InputStats input_stats;
+      // Counters for the progress line only.
+      atomic<size_t> live_reads{0}, bins_done{0}, bins_written{0};
       auto drain_file = [&](const string &accession_path)
       {
          SequenceReader reader(accession_path);
@@ -537,6 +550,7 @@ int main(int argc, char *argv[])
          vector<string> batch;
          while (reader.next_batch(batch, BATCH_READS))
          {
+            live_reads += batch.size();
             gate.acquire();                       // blocks if too many in flight
             pool.push_task([batch = std::move(batch), &store, NUM_FILES, &gate, &input_stats]() mutable
                            {
@@ -553,6 +567,13 @@ int main(int argc, char *argv[])
       // NVMe / parallel HPC filesystems roughly halves the read phase. On a single
       // spinning disk concurrent streams can seek-thrash; --kmer_count_read_threads 1
       // serialises them. I/O is a small fraction of the inflate cost on the target.
+      kmer::ProgressReporter progress(cout, "", [&](double s) {
+         const double n = (double)live_reads.load();
+         return "reading: " + kmer::ProgressReporter::count_text(n) + " reads, "
+                + kmer::ProgressReporter::count_text(s > 0 ? n * 60.0 / s : 0) + " reads/min, "
+                + to_string(store.spill_rounds()) + " spills";
+      });
+
       if (read_threads >= 2 && accession_list.size() >= 2)
       {
          vector<thread> readers;
@@ -587,21 +608,28 @@ int main(int argc, char *argv[])
          // that did the counting instead of one bin at a time. Sorting is done in
          // place, so this adds no memory beyond what accumulation already held.
          vector<size_t> before_filter(NUM_FILES, 0);
+         progress.set_line([&](double) {
+            return "finalizing: " + to_string(bins_done.load()) + " of " + to_string(NUM_FILES) + " bins";
+         });
          for (size_t b = 0; b < NUM_FILES; b++)
-            pool.push_task([&store, &before_filter, b, min_count]()
-                           { store.finalize_bin_inplace(b, min_count, &before_filter[b]); });
+            pool.push_task([&store, &before_filter, &bins_done, b, min_count]()
+                           { store.finalize_bin_inplace(b, min_count, &before_filter[b]); bins_done++; });
          pool.wait_for_tasks();
 
          // Phase B — write bins in ascending order (the pack's offset table
          // requires it). Each slice is already finalised, so this is just I/O and
          // stays serial; free each bin's memory as soon as it is written.
          kmer::PackStats stats;
+         progress.set_line([&](double) {
+            return "writing: " + to_string(bins_written.load()) + " of " + to_string(NUM_FILES) + " bins";
+         });
          for (size_t b = 0; b < NUM_FILES; b++)
          {
             const vector<kmer::Record>& slice = store.bin_slice(b);
             pack.write_bin((uint32_t)b, slice);
             stats.add_bin(slice.data(), slice.size());
             store.release_bin(b);
+            bins_written++;
          }
 
          uint64_t distinct_before = 0;
@@ -620,6 +648,7 @@ int main(int argc, char *argv[])
          cout << "  " << stats.distinct << " distinct k-mers across "
               << NUM_FILES << " bins" << endl;
       }
+      progress.stop();
       store.close_spill();
 
       end = chrono::steady_clock::now();

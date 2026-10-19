@@ -48,8 +48,10 @@
 #include "pack_io.hpp"
 #include "bin_store.hpp"
 #include "mem_limit.hpp"
+#include "progress.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -159,7 +161,10 @@ void usage(const char* prog) {
         << "  --headers reads the header of <kmc_dir>/<accession> for every accession,\n"
         << "  writes them to <out_tsv>, and stops if the databases cannot be combined\n"
         << "  (different k, -ci, -cx, or counter size when counts are kept).\n"
-        << "  allow_mixed y reports different -ci, -cx or counter sizes as warnings instead.\n";
+        << "  allow_mixed y reports different -ci, -cx or counter sizes as warnings instead.\n"
+        << "\n"
+        << "  A progress line is written every 600 s. The environment variable\n"
+        << "  KMER_GWAS_PROGRESS_SEC changes the interval; 0 turns it off.\n";
 }
 
 // ---------------------------------------------------------------------------
@@ -352,14 +357,29 @@ int convert_main(int argc, char** argv) {
     }
 
     // --- Budget (spill threshold only; never affects output) -----------------
+    const MemLimit ml = detect_memory_limit();
     size_t budget_bytes;
+    std::string budget_note;
     if (budget_gb > 0.0) {
         budget_bytes = (size_t)(budget_gb * (double)(1ULL << 30));
+        budget_note  = "explicit";
+    } else if (ml.bytes) {
+        budget_bytes = (size_t)((double)ml.bytes * 0.7);
+        budget_note  = "auto (70% of enforced limit)";
     } else {
-        const MemLimit ml = detect_memory_limit();
-        budget_bytes = ml.bytes ? (size_t)((double)ml.bytes * 0.7) : (size_t)8 * (1ULL << 30);
+        budget_bytes = (size_t)8 * (1ULL << 30);
+        budget_note  = "no limit found, default";
     }
-    if (budget_bytes < KMC2PACK_BUDGET_FLOOR_BYTES) budget_bytes = KMC2PACK_BUDGET_FLOOR_BYTES;
+    if (budget_bytes < KMC2PACK_BUDGET_FLOOR_BYTES) {
+        budget_bytes = KMC2PACK_BUDGET_FLOOR_BYTES;
+        budget_note += ", raised to the minimum";
+    }
+    const double GiB = (double)(1ULL << 30);
+    std::cerr << "kmc_to_pack: memory: enforced limit = "
+              << (ml.bytes ? std::to_string((long)(ml.bytes / GiB)) + " GB" : std::string("unknown"))
+              << " [" << ml.source << "]\n"
+              << "kmc_to_pack: memory: budget = " << (long)(budget_bytes / GiB)
+              << " GB (" << budget_note << ")\n";
 
     const std::string pack_path  = output_dir + out_prefix + ".kbin";
     const std::string stats_path = output_dir + out_prefix + ".pack_stats.tsv";
@@ -378,6 +398,18 @@ int convert_main(int argc, char** argv) {
     uint64 count = 0;
     uint64 max_in = 0;
     size_t n_in = 0;
+    // Counters for the progress line only. The read count is published every
+    // 2^20 k-mers, so the loop does not pay for an atomic per k-mer.
+    std::atomic<size_t> seen{0}, bins_done{0};
+    const uint64 total = info.total_kmers;
+    ProgressReporter progress(std::cerr, "kmc_to_pack: ", [&](double) {
+        const double n = (double)seen.load(std::memory_order_relaxed);
+        char pct[16];
+        std::snprintf(pct, sizeof pct, "%.0f%%", total ? 100.0 * n / (double)total : 0.0);
+        return "reading: " + ProgressReporter::count_text(n) + " of "
+               + ProgressReporter::count_text((double)total) + " k-mers (" + pct + "), "
+               + std::to_string(store.spill_rounds()) + " spills";
+    });
     while (db.ReadNextKmer(kmer, count)) {
         Key f, r;
         for (uint32 i = 0; i < kl; i++) {
@@ -396,6 +428,7 @@ int convert_main(int argc, char** argv) {
             pending[bin].clear();
         }
         n_in++;
+        if ((n_in & 0xFFFFF) == 0) seen.store(n_in, std::memory_order_relaxed);
     }
     db.Close();
 
@@ -424,6 +457,9 @@ int convert_main(int argc, char** argv) {
     PackWriter pack(pack_path, (uint32_t)num_bins);
     PackStats stats(count_limit);
     uint64_t distinct_before = 0;
+    progress.set_line([&](double) {
+        return "finalizing: " + std::to_string(bins_done.load()) + " of " + std::to_string(num_bins) + " bins";
+    });
     for (size_t b = 0; b < num_bins; b++) {
         size_t before = 0;
         store.finalize_bin_inplace(b, filter, &before);
@@ -432,7 +468,9 @@ int convert_main(int argc, char** argv) {
         pack.write_bin((uint32_t)b, slice);
         stats.add_bin(slice.data(), slice.size());
         store.release_bin(b);
+        bins_done++;
     }
+    progress.stop();
 
     PackMeta meta = pack_meta_base(out_prefix, "kmc", "kmc_to_pack");
     meta.set("kmc_api_version", KMC_VER);

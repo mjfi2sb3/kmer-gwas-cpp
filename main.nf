@@ -61,6 +61,8 @@ def helpMessage() {
                                  the matrix. false (default) writes no core file.
 
       Stage 1 resources (KMER_COUNT, one job per accession)
+        --kmer_count_cpus        CPUs requested per KMER_COUNT job                   [default: ${params.kmer_count_cpus}]
+                                 kmer_count runs this many worker threads.
         --kmer_count_memory      RAM requested per KMER_COUNT job                    [default: ${params.kmer_count_memory}]
                                  A scheduler request; the counting budget auto-sizes
                                  from it (see --kmer_count_budget_gb).
@@ -93,7 +95,7 @@ def helpMessage() {
         --max_cpus               CPU ceiling any request is clamped to              [default: ${params.max_cpus}]
         --max_time               Wallclock ceiling any request is clamped to        [default: ${params.max_time}]
                                  Set --max_memory/--max_cpus/--max_time to your largest node.
-        --singularity_cache_dir  Local path for Singularity image cache             [default: .singularity/]
+        --singularity_cache_dir  Singularity/Apptainer image cache directory        [default: .singularity/]
 
       Work directory and publishing
         --cleanup                Delete the work dir on successful completion        [default: false]
@@ -115,13 +117,15 @@ def helpMessage() {
                                  them decompressed first. With kmer_count_publish_mode link +
                                  cleanup false it saves nothing until work is removed.
 
-    Profiles:
-        -profile standard           Run locally
-        -profile slurm              Submit jobs to SLURM (module-system environment)
-        -profile slurm_container    Submit jobs to SLURM using Singularity container (recommended)
+    Profiles: one executor, optionally with one container engine (comma-separated)
+        executor:  local          Run on this machine (the default)
+                   slurm          Submit each task as a SLURM job
+        container: singularity, apptainer, docker, podman
+                   Without one, the host must provide GCC 12+, zlib and pigz.
+        Examples:  -profile slurm,singularity   -profile local,docker
 
     Example:
-        nextflow run main.nf -profile slurm_container --accessions_file samples.txt --data_dir /path/to/fastq
+        nextflow run main.nf -profile slurm,singularity --accessions_file samples.txt --kmer_size 51 --data_dir /path/to/fastq
     """.stripIndent()
 }
 
@@ -164,7 +168,6 @@ def paramSummary(String accessions_file, String data_dir) {
     def row  = { k, v -> "      ${k.padRight(W)}: ${c_val}${v}${c_reset}" }
     def head = { t     -> "    ${c_head}${t}${c_reset}" }
     def rule = "    ${c_banner}=========================================${c_reset}"
-    def budget = params.kmer_count_budget_gb == 0 ? '0 (auto)' : "${params.kmer_count_budget_gb} GB"
 
     // Grouped to mirror the --help sections. workflow.* are runtime facts (the
     // actual version/profile/work dir) that params alone cannot show.
@@ -176,6 +179,9 @@ def paramSummary(String accessions_file, String data_dir) {
         head('Run'),
         row('version',  workflow.manifest.version),
         row('profile',  workflow.profile),
+        row('executor', executorName()),
+        row('container_engine', engineName()),
+        row('container', containerText()),
         row('work_dir', workflow.workDir),
         head('Input / output'),
         row('accessions_file', accessions_file),
@@ -192,21 +198,12 @@ def paramSummary(String accessions_file, String data_dir) {
         row('delimiter',      params.delimiter),
         row('encoding',       params.encoding),
         row('write_core_kmers', params.write_core_kmers),
-        head('Stage 1 resources (KMER_COUNT)'),
-        row('kmer_count_memory',       "${params.kmer_count_memory.toGiga()}.GB"),
-        row('kmer_count_budget_gb',    budget),
-        row('kmer_count_read_threads', params.kmer_count_read_threads),
-        row('kmer_count_time',         params.kmer_count_time),
-        head('Stage 2 resources (MATRIX_MERGE)'),
-        row('matrix_merge_cpus',   params.matrix_merge_cpus),
-        row('matrix_merge_memory', "${params.matrix_merge_memory.toGiga()}.GB"),
-        row('matrix_merge_time',   params.matrix_merge_time),
+        head(params.input_mode == 'kmc' ? 'Stage 1 resources (KMC_TO_PACK)' : 'Stage 1 resources (KMER_COUNT)'),
+        *stage1Rows().collect { k, v -> row(k, v) },
+        head('Stage 2 resources (MATRIX_MERGE, COMPRESS_PACKS)'),
+        *stage2Rows().collect { k, v -> row(k, v) },
         head('Scheduler and execution'),
-        row('clusterOptions',        params.clusterOptions ?: '(none)'),
-        row('queue_size',            params.queue_size),
-        row('max_retries',           params.max_retries),
-        row('max_memory/cpus/time',  "${params.max_memory} / ${params.max_cpus} / ${params.max_time}"),
-        row('singularity_cache_dir', params.singularity_cache_dir),
+        *executionRows().collect { k, v -> row(k, v) },
         head('Work directory and publishing'),
         row('kmer_count_publish_mode', params.kmer_count_publish_mode),
         row('matrix_publish_mode', params.matrix_publish_mode),
@@ -251,6 +248,7 @@ def codeChecksum() {
         def proj = projectDir.toFile()
         ['main.nf', 'nextflow.config'].each { n -> def f = new File(proj, n); if (f.isFile()) files[n] = f }
         add('modules', new File(proj, 'modules'), { File f -> f.name.endsWith('.nf') })
+        add('conf',    new File(proj, 'conf'),    { File f -> f.name.endsWith('.config') })
         add('src', new File(params.src_dir.toString()),
             { File f -> f.name ==~ /.*\.(cpp|hpp|h)/ || f.name == 'Makefile' })
         files.keySet().sort().each { k ->
@@ -270,6 +268,99 @@ def gitDescribe() {
         def out = p.text.trim()
         return (p.exitValue() == 0 && out) ? out : 'n/a'
     } catch (Exception e) { return 'n/a' }
+}
+
+// ---------------------------------------------------------------------------
+// Execution settings (banner and run manifest)
+// ---------------------------------------------------------------------------
+// The executors and container engines that -profile selects. The workflow
+// stops when -profile selects more than one of either.
+def profileParts() {
+    def profiles = workflow.profile.tokenize(',')*.trim()
+    return [ executors: profiles.findAll { it in ['local', 'standard', 'slurm'] },
+             engines:   profiles.findAll { it in ['singularity', 'apptainer', 'docker', 'podman'] } ]
+}
+
+// 'standard' (no -profile) is the local executor.
+def executorName() {
+    def e = profileParts().executors
+    return (!e || e[0] == 'standard') ? 'local' : e[0]
+}
+
+def engineName() {
+    def e = profileParts().engines
+    return e ? e[0] : 'none'
+}
+
+def memUnit(v) {
+    return (v instanceof nextflow.util.MemoryUnit) ? v : new nextflow.util.MemoryUnit(v.toString())
+}
+
+// The CPUs or memory that a process requests in its first attempt, read from
+// the process settings (conf/base.config), and the cap that the executor
+// applies: the local limit (conf/local.config) or --max_cpus/--max_memory.
+def requestText(String process, String key) {
+    def v = nextflow.Global.session.config.process?.get("withName:${process}".toString())?.get(key)
+    if (v instanceof Closure) {
+        def cl = v.clone()
+        cl.delegate = [task: [attempt: 1], params: params]
+        cl.resolveStrategy = Closure.DELEGATE_FIRST
+        v = cl.call()
+    }
+    if (v == null) return 'n/a'
+    def local = executorName() == 'local'
+    def req   = key == 'cpus' ? (v as int) : memUnit(v)
+    def cap   = key == 'cpus' ? (local ? params.local_limit_cpus : params.max_cpus)
+                              : (local ? params.local_limit_memory : params.max_memory)
+    if (cap == null) return "${req}"
+    cap = key == 'cpus' ? (cap as int) : memUnit(cap)
+    def name = local ? 'local limit' : "max_${key}"
+    return req > cap ? "${req} (capped at ${cap}: ${name})" : "${req}"
+}
+
+def timeText(t) {
+    return executorName() == 'local' ? 'n/a (local)' : "${t}"
+}
+
+// Rows shared by the banner and run_manifest.txt. A setting that this run does
+// not use shows n/a and the reason.
+def stage1Rows() {
+    def kmc = params.input_mode == 'kmc'
+    return [
+        kmer_count_cpus:         kmc ? 'n/a (kmc mode)' : requestText('KMER_COUNT', 'cpus'),
+        kmc_to_pack_cpus:        kmc ? requestText('KMC_TO_PACK', 'cpus') : 'n/a (reads mode)',
+        kmer_count_memory:       requestText(kmc ? 'KMC_TO_PACK' : 'KMER_COUNT', 'memory'),
+        kmer_count_budget_gb:    params.kmer_count_budget_gb == 0 ? '0 (auto)' : "${params.kmer_count_budget_gb} GB",
+        kmer_count_read_threads: kmc ? 'n/a (kmc mode)' : params.kmer_count_read_threads,
+        kmer_count_time:         timeText(params.kmer_count_time)
+    ]
+}
+
+def stage2Rows() {
+    def off = 'n/a (compress_kbin_packs false)'
+    return [
+        matrix_merge_cpus:     requestText('MATRIX_MERGE', 'cpus'),
+        matrix_merge_memory:   requestText('MATRIX_MERGE', 'memory'),
+        matrix_merge_time:     timeText(params.matrix_merge_time),
+        compress_packs_cpus:   params.compress_kbin_packs ? requestText('COMPRESS_PACKS', 'cpus') : off,
+        compress_packs_memory: params.compress_kbin_packs ? requestText('COMPRESS_PACKS', 'memory') : off
+    ]
+}
+
+def executionRows() {
+    def local = executorName() == 'local'
+    def na    = 'n/a (local)'
+    return [
+        local_limit:           local ? "${params.local_limit_cpus} CPUs / ${memUnit(params.local_limit_memory)}" : 'n/a (slurm)',
+        clusterOptions:        local ? na : (params.clusterOptions ?: '(none)'),
+        queue_size:            local ? na : params.queue_size,
+        max_retries:           local ? na : params.max_retries,
+        max_cpus:              params.max_cpus,
+        max_memory:            memUnit(params.max_memory),
+        max_time:              local ? na : params.max_time,
+        singularity_cache_dir: engineName() in ['singularity', 'apptainer'] ? params.singularity_cache_dir
+                                                                            : 'n/a (no singularity/apptainer)'
+    ]
 }
 
 def containerText() {
@@ -311,6 +402,9 @@ def logPackSummary(f) {
 def writeManifest(String accessions_file, String data_dir, int n_accessions) {
     def dir = file(params.output_dir)
     dir.mkdirs()
+    def mounts = engineName() == 'none' ? 'n/a (no container)' : params.container_mount_dirs.join(', ')
+    def manifestRows = (stage1Rows() + stage2Rows() + executionRows() + [container_mount_dirs: mounts])
+        .collect { k, v -> "        ${k.padRight(19)} = ${v}" }.join('\n')
     file("${params.output_dir}/run_manifest.txt").text = """\
         # kmer-GWAS run manifest
         # Written at launch; the completion section is added when the run ends.
@@ -327,6 +421,8 @@ def writeManifest(String accessions_file, String data_dir, int n_accessions) {
         launch_dir          = ${workflow.launchDir}
         work_dir            = ${workflow.workDir}
         profile             = ${workflow.profile}
+        executor            = ${executorName()}
+        container_engine    = ${engineName()}
         container           = ${containerText()}
         command_line        = ${workflow.commandLine}
 
@@ -347,6 +443,9 @@ def writeManifest(String accessions_file, String data_dir, int n_accessions) {
         kmc_dir             = ${params.input_mode == 'kmc' ? file(params.kmc_dir ?: data_dir).toAbsolutePath().toString() : 'n/a (reads mode)'}
         data_dir            = ${dataDirText(data_dir)}
         output_dir          = ${params.output_dir}
+
+        # Resources and execution. A setting that this run does not use shows n/a.
+${manifestRows}
 
         # Stage 1 packs live in kmer_count_k${params.kmer_size}/. Each pack records
         # its k (${params.kmer_size}) and is rejected by a reader built for any other k.
@@ -417,6 +516,16 @@ workflow.onComplete {
 // ---------------------------------------------------------------------------
 workflow {
 
+    // Profiles: at most one executor and one container engine. A container
+    // engine needs an executor, because the executor profile sets the resources.
+    def executors = profileParts().executors
+    def engines   = profileParts().engines
+    if (executors.size() > 1)
+        exit 1, "ERROR: -profile ${workflow.profile} selects more than one executor (${executors.join(', ')}). Select one: local or slurm."
+    if (engines.size() > 1)
+        exit 1, "ERROR: -profile ${workflow.profile} selects more than one container engine (${engines.join(', ')}). Select one."
+    if (engines && !executors)
+        exit 1, "ERROR: -profile ${workflow.profile} has no executor. Add local or slurm, e.g. -profile local,${engines[0]}."
 
     // The packs record the version in src/version.hpp; it must match the manifest.
     def version_hpp = new File("${params.src_dir}/version.hpp")

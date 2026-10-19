@@ -29,6 +29,8 @@ process KMC_TO_PACK {
     script:
     // As in KMER_COUNT, a budget of 0 auto-sizes the accumulation memory from the
     // limit actually enforced on the job; it only affects spilling, never the pack.
+    // With the local executor, KMER_GWAS_TASK_MEMORY passes the task's memory
+    // request as one more limit, because local tasks share one machine.
     """
     for ext in kmc_pre kmc_suf; do
         [ -f "${kmc_dir}/${accession}.\${ext}" ] || {
@@ -41,6 +43,7 @@ process KMC_TO_PACK {
         ${params.src_dir}/kmc_api/kmer_api.cpp \\
         ${params.src_dir}/kmc_api/mmer.cpp
 
+    ${task.executor == 'local' && task.memory ? "export KMER_GWAS_TASK_MEMORY=${task.memory.toBytes()}" : ''}
     ./kmc_to_pack ${kmc_dir}/${accession} ${num_bins} ./ ${accession} \\
         ${params.min_kmer_count != null ? params.min_kmer_count : 0} ${params.kmer_count_budget_gb}
     """

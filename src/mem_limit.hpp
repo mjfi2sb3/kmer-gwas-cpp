@@ -27,6 +27,10 @@
 //       SLURM_CPUS_PER_TASK. Carries `--mem` even when the cluster does not
 //       enforce it through a cgroup.
 //    4. MemTotal from /proc/meminfo — the final floor (bare workstation).
+//    5. KMER_GWAS_TASK_MEMORY env (bytes) — the task's memory request, set by
+//       the pipeline with the local executor. Local tasks share one machine
+//       with no per-task limit, so MemTotal alone would let every task size
+//       its budget from the whole machine.
 //
 //  Purely observational: it reads, never sets. Output is unaffected by the
 //  budget, so this can only change how often Stage 1 spills, never the result.
@@ -130,6 +134,12 @@ inline MemLimit detect_memory_limit() {
             }
             std::string rest; std::getline(f, rest);
         }
+    }
+
+    // 5. The task's memory request (local executor).
+    if (const char* t = std::getenv("KMER_GWAS_TASK_MEMORY")) {
+        size_t v = std::strtoull(t, nullptr, 10);
+        if (v) consider(v, "task memory");
     }
 
     MemLimit out;
