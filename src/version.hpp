@@ -6,6 +6,6 @@
 //
 // It is kept here, not passed on the compile line, so that the Nextflow task
 // scripts do not change between releases and -resume keeps its cached tasks.
-#define KMER_GWAS_VERSION "4.1.0"
+#define KMER_GWAS_VERSION "4.2.0"
 
 #endif

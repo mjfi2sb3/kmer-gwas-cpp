@@ -4,6 +4,34 @@ All notable changes to this pipeline are documented here.
 Versions follow [semantic versioning](https://semver.org): the major number is
 bumped when output or interfaces change in a backwards-incompatible way.
 
+## v4.2.0
+
+Adds parameter validation against a schema and support for Nextflow 26.x.
+Matrices are byte-identical to v4.1.0.
+
+**Upgrade notes:** Nextflow 25.10 or later is required. A parameter that the
+pipeline does not know (for example a typo, or one in a `-params-file` or `-c`
+file) now stops the run at launch; before, Nextflow ignored it.
+
+### Added
+
+- **`nextflow_schema.json`**: the type, range, allowed values and format of
+  every parameter. The nf-schema plugin (2.7.3) checks the parameters at launch
+  and lists all errors in one message. An unknown parameter, e.g. a typo, stops
+  the run. Nextflow downloads the plugin on the first run.
+- **README: Running offline**: how to install the plugin for compute nodes with
+  no internet access (`nextflow plugin install`, `NXF_OFFLINE=true`), with
+  instructions for Shaheen III.
+
+### Changed
+
+- **Nextflow 25.10 or later** is required. The pipeline also runs on
+  Nextflow 26.x, which uses the strict syntax.
+- Some error messages for bad values have a new format, because the schema
+  now does these checks.
+- The code checksum in `run_manifest.txt` includes `nextflow_schema.json`.
+- A `-resume` of a v4.1.0 run uses the cached Stage 1 and Stage 2 tasks.
+
 ## v4.1.0
 
 Reworks the execution profiles, fixes Stage 1 on workstations, and adds progress
