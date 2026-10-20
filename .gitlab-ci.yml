@@ -38,6 +38,22 @@ build-tools:
       - bits_to_text
     expire_in: never
 
+# Release notes for the tag: the "## <tag>" section of CHANGELOG.md (up to the
+# next "## "), written to release_notes.md. A one-line text is used if the
+# section is not found.
+.changelog-notes:
+  script:
+    - |
+      notes="$(awk -v t="## ${CI_COMMIT_TAG}" '
+        $0==t {f=1; next}
+        f && /^## / {exit}
+        f {print}
+      ' CHANGELOG.md)"
+      if [ -z "$notes" ]; then
+        notes="Release ${CI_COMMIT_TAG}. See CHANGELOG.md."
+      fi
+      printf '%s\n' "$notes" > release_notes.md
+
 # Create a GitLab Release for the tag, once the image has built. The release
 # notes are the matching section of CHANGELOG.md, extracted at build time so the
 # Release page and the changelog cannot drift apart.
@@ -50,19 +66,8 @@ create-release:
   rules:
     - if: $CI_COMMIT_TAG
   script:
-    # Pull the "## <tag>" section out of CHANGELOG.md (up to the next "## ").
-    # Fall back to a one-line description if that section is not found.
-    - |
-      notes="$(awk -v t="## ${CI_COMMIT_TAG}" '
-        $0==t {f=1; next}
-        f && /^## / {exit}
-        f {print}
-      ' CHANGELOG.md)"
-      if [ -z "$notes" ]; then
-        notes="Release ${CI_COMMIT_TAG}. See CHANGELOG.md."
-      fi
-      printf '%s\n' "$notes" > release_notes.md
-      echo "----- release notes -----"; cat release_notes.md
+    - !reference [.changelog-notes, script]
+    - echo "----- release notes -----"; cat release_notes.md
   release:
     tag_name: "$CI_COMMIT_TAG"
     name: "Release $CI_COMMIT_TAG"
@@ -75,3 +80,54 @@ create-release:
         - name: "bits_to_text (x86-64 Linux, static)"
           url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/bits_to_text?job=build-tools"
           link_type: other
+
+# Create the matching GitHub release, with the same notes and the two static
+# tools as files. GITHUB_TOKEN needs write access to the repository contents.
+# Safe to run again: an existing release is reused, and a file of the same
+# name is replaced.
+github-release:
+  stage: release
+  image: alpine:3.20
+  needs:
+    - build-container
+    - build-tools
+  rules:
+    - if: $CI_COMMIT_TAG
+  variables:
+    GH_REPO: mjfi2sb3/kmer-gwas-cpp
+  script:
+    - apk add --no-cache curl jq
+    - !reference [.changelog-notes, script]
+    - |
+      api() { curl -sS --fail-with-body \
+                -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+                -H "Accept: application/vnd.github+json" \
+                -H "X-GitHub-Api-Version: 2022-11-28" "$@"; }
+      base="https://api.github.com/repos/${GH_REPO}"
+
+      # The tag reaches GitHub through the push mirror. Wait up to 10 minutes.
+      i=0
+      until api -o /dev/null "${base}/git/ref/tags/${CI_COMMIT_TAG}" 2>/dev/null; do
+        i=$((i + 1))
+        if [ "$i" -ge 30 ]; then echo "Tag ${CI_COMMIT_TAG} is not on GitHub after 10 minutes."; exit 1; fi
+        sleep 20
+      done
+
+      # Use the release if it exists; otherwise create it.
+      id="$(api "${base}/releases/tags/${CI_COMMIT_TAG}" 2>/dev/null | jq -r '.id // empty')" || id=""
+      if [ -z "$id" ]; then
+        id="$(jq -n --arg t "${CI_COMMIT_TAG}" --rawfile b release_notes.md \
+                '{tag_name: $t, name: ("Release " + $t), body: $b}' \
+              | api -X POST -d @- "${base}/releases" | jq -r '.id // empty')"
+      fi
+      if [ -z "$id" ]; then echo "Could not create the GitHub release."; exit 1; fi
+
+      # Upload the tools. A file of the same name is replaced.
+      for f in kbin_dump bits_to_text; do
+        old="$(api "${base}/releases/${id}/assets" | jq -r --arg n "$f" '.[] | select(.name == $n) | .id')"
+        if [ -n "$old" ]; then api -X DELETE "${base}/releases/assets/${old}"; fi
+        api -o /dev/null -X POST -H "Content-Type: application/octet-stream" \
+            --data-binary "@${f}" \
+            "https://uploads.github.com/repos/${GH_REPO}/releases/${id}/assets?name=${f}"
+        echo "Uploaded ${f}"
+      done
