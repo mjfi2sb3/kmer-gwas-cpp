@@ -1,0 +1,368 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mjfi2sb3/kmer-gwas-cpp/blob/master/nextflow_schema.json",
+  "title": "kmer-gwas-cpp parameters",
+  "description": "k-mer GWAS matrix construction pipeline",
+  "type": "object",
+  "$defs": {
+    "input_output": {
+      "title": "Input and output",
+      "type": "object",
+      "properties": {
+        "accessions_file": {
+          "type": "string",
+          "description": "Accession list."
+        },
+        "input_mode": {
+          "type": "string",
+          "description": "Stage 1 input: reads (FASTQ/FASTA) or kmc (KMC databases).",
+          "enum": [
+            "reads",
+            "kmc"
+          ]
+        },
+        "data_dir": {
+          "type": "string",
+          "description": "Directory containing read files."
+        },
+        "kmc_dir": {
+          "type": "string",
+          "description": "Directory containing KMC databases (--input_mode kmc). Default: --data_dir."
+        },
+        "kmc_allow_mixed": {
+          "type": "boolean",
+          "description": "kmc mode: warn instead of stopping when the databases were built with different -ci, -cx or counter sizes."
+        },
+        "skip_accession_check": {
+          "type": "boolean",
+          "description": "Allow packs whose recorded accession differs from their file name."
+        },
+        "output_dir": {
+          "type": "string",
+          "description": "Output directory."
+        }
+      }
+    },
+    "kmers_and_matrix": {
+      "title": "k-mers and matrix",
+      "type": "object",
+      "properties": {
+        "kmer_size": {
+          "type": "integer",
+          "enum": [
+            15,
+            17,
+            19,
+            21,
+            23,
+            25,
+            27,
+            29,
+            31,
+            33,
+            35,
+            37,
+            39,
+            41,
+            43,
+            45,
+            47,
+            49,
+            51,
+            53,
+            55,
+            57,
+            59,
+            61,
+            63
+          ],
+          "description": "Odd k-mer length from 15 to 63. Required with --input_mode reads. With --input_mode kmc, read from the databases.",
+          "errorMessage": "must be an odd number from 15 to 63. In kmc mode, the value can come from the KMC databases."
+        },
+        "num_bins": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Number of k-mer bins and Stage 2 output shards."
+        },
+        "min_kmer_count": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Discard k-mers observed fewer than this many times within an accession. Default: 2 in reads mode; in kmc mode, the databases' own -ci applies and a larger value is enforced as well.",
+          "maximum": 65535,
+          "errorMessage": "must be a whole number from 1 to 65535."
+        },
+        "threshold": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Two-sided minor-allele-frequency filter expressed as an accession-count threshold."
+        },
+        "keep_kmer_counts": {
+          "type": "string",
+          "description": "n for presence/absence; y for raw per-accession counts.",
+          "enum": [
+            "y",
+            "n"
+          ]
+        },
+        "encoding": {
+          "type": "string",
+          "description": "text or bits; bit encoding is for presence/absence only.",
+          "enum": [
+            "text",
+            "bits"
+          ]
+        },
+        "delimiter": {
+          "type": "string",
+          "description": "Text value delimiter: none, tab, or space.",
+          "enum": [
+            "tab",
+            "space",
+            "none"
+          ],
+          "errorMessage": "must be 'tab', 'space' or 'none'. 'bits' is now --encoding bits."
+        },
+        "write_core_kmers": {
+          "type": "boolean",
+          "description": "Write k-mers present in every accession to a separate file."
+        }
+      }
+    },
+    "stage1_resources": {
+      "title": "Stage 1 resources",
+      "type": "object",
+      "properties": {
+        "kmer_count_cpus": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "CPUs and worker threads per KMER_COUNT job."
+        },
+        "kmer_count_memory": {
+          "type": [
+            "integer",
+            "string"
+          ],
+          "pattern": "^\\d+(\\.\\d+)?\\.?\\s*[KMGTkmgt]?[Bb]$",
+          "description": "Scheduler memory request per KMER_COUNT and KMC_TO_PACK job.",
+          "errorMessage": "must be a memory value, e.g. 128.GB or '64 GB'.",
+          "minimum": 1
+        },
+        "kmer_count_budget_gb": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Stage 1 accumulation budget, GB. 0 uses 70% of the task's memory limit."
+        },
+        "kmer_count_read_threads": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Concurrent read/decompression threads."
+        },
+        "kmer_count_time": {
+          "type": "string",
+          "pattern": "^(\\d+(\\.\\d+)?\\s*(ms|s|sec|m|min|h|hour|hours|d|day|days)\\s*)+$",
+          "description": "Wall-clock limit per KMER_COUNT and KMC_TO_PACK job.",
+          "errorMessage": "must be a time value, e.g. 5h, 30m or '1d 6h'."
+        }
+      }
+    },
+    "stage2_resources": {
+      "title": "Stage 2 resources",
+      "type": "object",
+      "properties": {
+        "matrix_merge_cpus": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Threads used by MATRIX_MERGE."
+        },
+        "matrix_merge_memory": {
+          "type": [
+            "integer",
+            "string"
+          ],
+          "pattern": "^\\d+(\\.\\d+)?\\.?\\s*[KMGTkmgt]?[Bb]$",
+          "description": "Memory request per MATRIX_MERGE job.",
+          "errorMessage": "must be a memory value, e.g. 128.GB or '64 GB'.",
+          "minimum": 1
+        },
+        "matrix_merge_time": {
+          "type": "string",
+          "pattern": "^(\\d+(\\.\\d+)?\\s*(ms|s|sec|m|min|h|hour|hours|d|day|days)\\s*)+$",
+          "description": "Wall-clock limit per MATRIX_MERGE job.",
+          "errorMessage": "must be a time value, e.g. 5h, 30m or '1d 6h'."
+        }
+      }
+    },
+    "execution": {
+      "title": "Scheduler and execution",
+      "type": "object",
+      "properties": {
+        "clusterOptions": {
+          "type": "string",
+          "description": "Additional SLURM options passed to jobs."
+        },
+        "queue_size": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum queued and running jobs submitted by SLURM."
+        },
+        "max_retries": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Extra attempts for a job that failed because it ran out of memory or time (slurm only). 0 disables retries."
+        },
+        "max_cpus": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Largest CPU request for one job. With local, also the most CPUs the run uses."
+        },
+        "max_memory": {
+          "type": [
+            "integer",
+            "string"
+          ],
+          "pattern": "^\\d+(\\.\\d+)?\\.?\\s*[KMGTkmgt]?[Bb]$",
+          "description": "Largest memory request for one job. With local, also the most memory the run uses.",
+          "errorMessage": "must be a memory value, e.g. 128.GB or '64 GB'.",
+          "minimum": 1
+        },
+        "max_time": {
+          "type": "string",
+          "pattern": "^(\\d+(\\.\\d+)?\\s*(ms|s|sec|m|min|h|hour|hours|d|day|days)\\s*)+$",
+          "description": "Largest time limit for one job (slurm only).",
+          "errorMessage": "must be a time value, e.g. 5h, 30m or '1d 6h'."
+        },
+        "singularity_cache_dir": {
+          "type": "string",
+          "description": "Singularity/Apptainer image cache directory."
+        }
+      }
+    },
+    "publishing": {
+      "title": "Publishing",
+      "type": "object",
+      "properties": {
+        "kmer_count_publish_mode": {
+          "type": "string",
+          "enum": [
+            "link",
+            "copy",
+            "move"
+          ],
+          "description": "Publish Stage 1 packs using link, copy, or move."
+        },
+        "matrix_publish_mode": {
+          "type": "string",
+          "enum": [
+            "link",
+            "copy",
+            "move"
+          ],
+          "description": "Publish Stage 2 matrices using link, copy, or move."
+        },
+        "cleanup": {
+          "type": "boolean",
+          "description": "Remove the Nextflow work directory after successful completion."
+        },
+        "compress_kbin_packs": {
+          "type": "boolean",
+          "description": "Compress published .kbin files after both stages finish."
+        }
+      }
+    },
+    "internal": {
+      "title": "Internal",
+      "type": "object",
+      "properties": {
+        "src_dir": {
+          "hidden": true,
+          "description": "Set by the pipeline. Do not set."
+        },
+        "container_mount_dirs": {
+          "hidden": true,
+          "description": "Set by the pipeline. Do not set."
+        },
+        "local_limit_cpus": {
+          "hidden": true,
+          "description": "Set by the pipeline. Do not set."
+        },
+        "local_limit_memory": {
+          "hidden": true,
+          "description": "Set by the pipeline. Do not set."
+        },
+        "kmc_detected_kmer_size": {
+          "hidden": true,
+          "description": "Set by the pipeline. Do not set."
+        },
+        "kmc_detected_format": {
+          "hidden": true,
+          "description": "Set by the pipeline. Do not set."
+        },
+        "kmc_kmer_size_from_db": {
+          "hidden": true,
+          "description": "Set by the pipeline. Do not set."
+        },
+        "kmc_detect_error": {
+          "hidden": true,
+          "description": "Set by the pipeline. Do not set."
+        }
+      }
+    },
+    "deprecated": {
+      "title": "Deprecated",
+      "type": "object",
+      "properties": {
+        "count": {
+          "hidden": true,
+          "description": "Renamed to --keep_kmer_counts."
+        },
+        "core": {
+          "hidden": true,
+          "description": "Renamed to --write_core_kmers."
+        },
+        "publish_mode": {
+          "hidden": true,
+          "description": "Renamed to --kmer_count_publish_mode."
+        }
+      }
+    },
+    "other": {
+      "title": "Other",
+      "type": "object",
+      "properties": {
+        "help": {
+          "type": "boolean",
+          "description": "Show the help text and exit."
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "$ref": "#/$defs/input_output"
+    },
+    {
+      "$ref": "#/$defs/kmers_and_matrix"
+    },
+    {
+      "$ref": "#/$defs/stage1_resources"
+    },
+    {
+      "$ref": "#/$defs/stage2_resources"
+    },
+    {
+      "$ref": "#/$defs/execution"
+    },
+    {
+      "$ref": "#/$defs/publishing"
+    },
+    {
+      "$ref": "#/$defs/internal"
+    },
+    {
+      "$ref": "#/$defs/deprecated"
+    },
+    {
+      "$ref": "#/$defs/other"
+    }
+  ]
+}

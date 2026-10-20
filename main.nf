@@ -7,6 +7,7 @@ include { KMC_HEADERS   } from './modules/kmc_headers'
 include { MATRIX_MERGE  } from './modules/matrix_merge'
 include { BUILD_TOOLS   } from './modules/build_tools'
 include { COMPRESS_PACKS } from './modules/compress_packs'
+include { validateParameters } from 'plugin/nf-schema'
 
 // ---------------------------------------------------------------------------
 // Help
@@ -129,30 +130,6 @@ def helpMessage() {
     """.stripIndent()
 }
 
-if (params.help) {
-    helpMessage()
-    exit 0
-}
-
-// Backwards compatibility: deprecated flags mapped to current params for
-// continuity. Remove these shims in a future release.
-if (params.core != null) {
-    log.warn "--core is deprecated and was renamed to --write_core_kmers; " +
-             "honouring it as --write_core_kmers ${params.write_core_kmers}. " +
-             "Please switch, as --core will be removed in a future release."
-}
-if (params.publish_mode != null) {
-    log.warn "--publish_mode is deprecated and was renamed to --kmer_count_publish_mode; " +
-             "honouring it as --kmer_count_publish_mode ${params.kmer_count_publish_mode}. " +
-             "Please switch, as --publish_mode will be removed in a future release."
-}
-if (params.count != null) {
-    log.warn "--count is deprecated and was renamed to --keep_kmer_counts; " +
-             "honouring it as --keep_kmer_counts ${params.keep_kmer_counts}. " +
-             "Please switch, as --count will be removed in a future release."
-}
-
-
 // ---------------------------------------------------------------------------
 // Parameter summary
 // ---------------------------------------------------------------------------
@@ -176,39 +153,39 @@ def paramSummary(String accessions_file, String data_dir) {
         rule,
         "    ${c_banner} k m e r - G W A S  p i p e l i n e${c_reset}",
         rule,
-        head('Run'),
-        row('version',  workflow.manifest.version),
-        row('profile',  workflow.profile),
-        row('executor', executorName()),
-        row('container_engine', engineName()),
-        row('container', containerText()),
-        row('work_dir', workflow.workDir),
-        head('Input / output'),
-        row('accessions_file', accessions_file),
-        row('data_dir',        params.input_mode == 'kmc' ? '(n/a: kmc mode)' : data_dir),
-        row('output_dir',      params.output_dir),
-        row('input_mode',      params.input_mode),
-        row('kmc_dir',         params.input_mode == 'kmc' ? file(params.kmc_dir ?: data_dir).toAbsolutePath().toString() : '(n/a: reads mode)'),
-        head('k-mers and matrix content'),
-        row('kmer_size',      kmerSizeText()),
-        row('num_bins',       params.num_bins),
-        row('min_kmer_count', minCountText()),
-        row('threshold',      params.threshold),
-        row('keep kmer counts',          params.keep_kmer_counts),
-        row('delimiter',      params.delimiter),
-        row('encoding',       params.encoding),
-        row('write_core_kmers', params.write_core_kmers),
-        head(params.input_mode == 'kmc' ? 'Stage 1 resources (KMC_TO_PACK)' : 'Stage 1 resources (KMER_COUNT)'),
-        *stage1Rows().collect { k, v -> row(k, v) },
-        head('Stage 2 resources (MATRIX_MERGE, COMPRESS_PACKS)'),
-        *stage2Rows().collect { k, v -> row(k, v) },
-        head('Scheduler and execution'),
-        *executionRows().collect { k, v -> row(k, v) },
-        head('Work directory and publishing'),
-        row('kmer_count_publish_mode', params.kmer_count_publish_mode),
-        row('matrix_publish_mode', params.matrix_publish_mode),
-        row('cleanup',           params.cleanup),
-        row('compress_kbin_packs', params.compress_kbin_packs),
+        head.call('Run'),
+        row.call('version',  workflow.manifest.version),
+        row.call('profile',  workflow.profile),
+        row.call('executor', executorName()),
+        row.call('container_engine', engineName()),
+        row.call('container', containerText()),
+        row.call('work_dir', workflow.workDir),
+        head.call('Input / output'),
+        row.call('accessions_file', accessions_file),
+        row.call('data_dir',        params.input_mode == 'kmc' ? '(n/a: kmc mode)' : data_dir),
+        row.call('output_dir',      params.output_dir),
+        row.call('input_mode',      params.input_mode),
+        row.call('kmc_dir',         params.input_mode == 'kmc' ? file(params.kmc_dir ?: data_dir).toAbsolutePath().toString() : '(n/a: reads mode)'),
+        head.call('k-mers and matrix content'),
+        row.call('kmer_size',      kmerSizeText()),
+        row.call('num_bins',       params.num_bins),
+        row.call('min_kmer_count', minCountText()),
+        row.call('threshold',      params.threshold),
+        row.call('keep kmer counts',          params.keep_kmer_counts),
+        row.call('delimiter',      params.delimiter),
+        row.call('encoding',       params.encoding),
+        row.call('write_core_kmers', params.write_core_kmers),
+        head.call(params.input_mode == 'kmc' ? 'Stage 1 resources (KMC_TO_PACK)' : 'Stage 1 resources (KMER_COUNT)')
+    ] + stage1Rows().collect { k, v -> row.call(k, v) } + [
+        head.call('Stage 2 resources (MATRIX_MERGE, COMPRESS_PACKS)')
+    ] + stage2Rows().collect { k, v -> row.call(k, v) } + [
+        head.call('Scheduler and execution')
+    ] + executionRows().collect { k, v -> row.call(k, v) } + [
+        head.call('Work directory and publishing'),
+        row.call('kmer_count_publish_mode', params.kmer_count_publish_mode),
+        row.call('matrix_publish_mode', params.matrix_publish_mode),
+        row.call('cleanup',           params.cleanup),
+        row.call('compress_kbin_packs', params.compress_kbin_packs),
         "    ${c_banner}-----------------------------------------${c_reset}",
         ""
     ]
@@ -242,18 +219,18 @@ def codeChecksum() {
         def add   = { String tag, File root, Closure keep ->
             if (!root.isDirectory()) return
             root.eachFileRecurse(groovy.io.FileType.FILES) { f ->
-                if (keep(f)) files["${tag}/${root.toPath().relativize(f.toPath())}".toString()] = f
+                if (keep.call(f)) files["${tag}/${root.toPath().relativize(f.toPath())}".toString()] = f
             }
         }
         def proj = projectDir.toFile()
-        ['main.nf', 'nextflow.config'].each { n -> def f = new File(proj, n); if (f.isFile()) files[n] = f }
-        add('modules', new File(proj, 'modules'), { File f -> f.name.endsWith('.nf') })
-        add('conf',    new File(proj, 'conf'),    { File f -> f.name.endsWith('.config') })
-        add('src', new File(params.src_dir.toString()),
+        ['main.nf', 'nextflow.config', 'nextflow_schema.json'].each { n -> def f = new File(proj, n); if (f.isFile()) files[n] = f }
+        add.call('modules', new File(proj, 'modules'), { File f -> f.name.endsWith('.nf') })
+        add.call('conf',    new File(proj, 'conf'),    { File f -> f.name.endsWith('.config') })
+        add.call('src', new File(params.src_dir.toString()),
             { File f -> f.name ==~ /.*\.(cpp|hpp|h)/ || f.name == 'Makefile' })
         files.keySet().sort().each { k ->
-            md.update(k.getBytes('UTF-8')); md.update((byte) 0)
-            md.update(files[k].bytes);      md.update((byte) 0)
+            md.update(k.getBytes('UTF-8')); md.update(0 as byte)
+            md.update(files[k].bytes);      md.update(0 as byte)
         }
         return md.digest().encodeHex().toString()
     } catch (Exception e) { return "n/a (${e.message})" }
@@ -267,7 +244,7 @@ def gitDescribe() {
         p.waitForOrKill(10000)
         def out = p.text.trim()
         return (p.exitValue() == 0 && out) ? out : 'n/a'
-    } catch (Exception e) { return 'n/a' }
+    } catch (Exception _e) { return 'n/a' }
 }
 
 // ---------------------------------------------------------------------------
@@ -277,8 +254,8 @@ def gitDescribe() {
 // stops when -profile selects more than one of either.
 def profileParts() {
     def profiles = workflow.profile.tokenize(',')*.trim()
-    return [ executors: profiles.findAll { it in ['local', 'standard', 'slurm'] },
-             engines:   profiles.findAll { it in ['singularity', 'apptainer', 'docker', 'podman'] } ]
+    return [ executors: profiles.findAll { p -> p in ['local', 'standard', 'slurm'] },
+             engines:   profiles.findAll { p -> p in ['singularity', 'apptainer', 'docker', 'podman'] } ]
 }
 
 // 'standard' (no -profile) is the local executor.
@@ -377,18 +354,18 @@ def dataDirText(String data_dir) {
 // Logs a short summary of pack_stats.tsv: size and coverage ranges, and the
 // accessions with the fewest distinct k-mers (often failed or low-coverage samples).
 def logPackSummary(f) {
-    def lines = f.readLines().findAll { it.trim() }
+    def lines = f.readLines().findAll { l -> l.trim() }
     if (lines.size() < 2) return
     def keys = lines[0].split('\t') as List
     def rows = lines.drop(1).collect { l -> [keys, l.split('\t', -1) as List].transpose().collectEntries() }
-    def nums = { key -> rows.collect { it[key] }.findAll { it && it != 'NA' }.collect { it as long }.sort() }
-    def range = { v -> v ? "min ${v[0]}, median ${v[(int)(v.size() / 2)]}, max ${v[-1]}" : 'n/a' }
-    def lowest = rows.findAll { it.distinct_kmers_after_filter && it.distinct_kmers_after_filter != 'NA' }
-                     .sort { (it.distinct_kmers_after_filter as long) }.take(3)
-                     .collect { "${it.accession} (${it.distinct_kmers_after_filter})" }.join(', ')
+    def nums = { key -> rows.collect { r -> r[key] }.findAll { v -> v && v != 'NA' }.collect { v -> v as long }.sort() }
+    def range = { v -> v ? "min ${v[0]}, median ${v[v.size().intdiv(2)]}, max ${v[-1]}" : 'n/a' }
+    def lowest = rows.findAll { r -> r.distinct_kmers_after_filter && r.distinct_kmers_after_filter != 'NA' }
+                     .sort { r -> (r.distinct_kmers_after_filter as long) }.take(3)
+                     .collect { r -> "${r.accession} (${r.distinct_kmers_after_filter})" }.join(', ')
     log.info "Pack statistics (${rows.size()} packs, ${f}):\n" +
-             "  distinct k-mers : ${range(nums('distinct_kmers_after_filter'))}\n" +
-             "  k-mer coverage  : ${range(nums('estimated_kmer_coverage'))} (estimated)\n" +
+             "  distinct k-mers : ${range.call(nums.call('distinct_kmers_after_filter'))}\n" +
+             "  k-mer coverage  : ${range.call(nums.call('estimated_kmer_coverage'))} (estimated)\n" +
              "  fewest k-mers   : ${lowest}"
 }
 
@@ -461,9 +438,9 @@ def writeCompletion() {
         def f = new File("${params.output_dir}/run_manifest.txt")
         if (!f.isFile()) return
         def text = f.text
-        if (!(text =~ /(?m)^run_name\s+= ${java.util.regex.Pattern.quote(workflow.runName)}$/)) return
+        if (!(text =~ ('(?m)^run_name\\s+= ' + java.util.regex.Pattern.quote(workflow.runName) + '$'))) return
         def status = workflow.success ? 'success' : 'failed'
-        def err    = workflow.success ? null : (workflow.errorMessage ?: '').readLines().find { it.trim() }?.trim()
+        def err    = workflow.success ? null : (workflow.errorMessage ?: '').readLines().find { l -> l.trim() }?.trim()
         def lines  = [
             '',
             '# Completion',
@@ -481,7 +458,7 @@ def writeCompletion() {
 // ---------------------------------------------------------------------------
 // Completion summary
 // ---------------------------------------------------------------------------
-workflow.onComplete {
+def completionSummary() {
     writeCompletion()
     // Work-dir cleanup is handled by the native `cleanup` directive in
     // nextflow.config (cleanup = params.cleanup), which is safe for the
@@ -516,6 +493,36 @@ workflow.onComplete {
 // ---------------------------------------------------------------------------
 workflow {
 
+    if (params.help) {
+        helpMessage()
+        exit 0
+    }
+
+    // Check every parameter against nextflow_schema.json: type, range, allowed
+    // values and format. All errors are listed in one message. Rules that involve
+    // more than one parameter are checked in the workflow below.
+    validateParameters()
+
+    // Backwards compatibility: deprecated flags mapped to current params for
+    // continuity. Remove these shims in a future release.
+    if (params.core != null) {
+        log.warn "--core is deprecated and was renamed to --write_core_kmers; " +
+                 "honouring it as --write_core_kmers ${params.write_core_kmers}. " +
+                 "Please switch, as --core will be removed in a future release."
+    }
+    if (params.publish_mode != null) {
+        log.warn "--publish_mode is deprecated and was renamed to --kmer_count_publish_mode; " +
+                 "honouring it as --kmer_count_publish_mode ${params.kmer_count_publish_mode}. " +
+                 "Please switch, as --publish_mode will be removed in a future release."
+    }
+    if (params.count != null) {
+        log.warn "--count is deprecated and was renamed to --keep_kmer_counts; " +
+                 "honouring it as --keep_kmer_counts ${params.keep_kmer_counts}. " +
+                 "Please switch, as --count will be removed in a future release."
+    }
+
+    workflow.onComplete { completionSummary() }
+
     // Profiles: at most one executor and one container engine. A container
     // engine needs an executor, because the executor profile sets the resources.
     def executors = profileParts().executors
@@ -538,18 +545,15 @@ workflow {
         exit 1, "ERROR: ${version_hpp} gives version ${src_version}, but manifest.version in " +
                 "nextflow.config is ${workflow.manifest.version}. They must match."
 
-    if (params.min_kmer_count != null &&
-        !(params.min_kmer_count.toString().isInteger() && (params.min_kmer_count as Integer) in 1..65535))
-        exit 1, "ERROR: --min_kmer_count must be a whole number from 1 to 65535 (got '${params.min_kmer_count}')."
-
-    if (!(params.input_mode in ['reads', 'kmc']))
-        exit 1, "ERROR: --input_mode must be 'reads' or 'kmc' (got '${params.input_mode}')."
-
     // Resolve k. Reads mode: --kmer_size is required. kmc mode: k is fixed by the
     // databases; nextflow.config reads it from the first accession's .kmc_pre into
     // kmc_detected_kmer_size and adopts it when --kmer_size was not given, so an
     // explicit --kmer_size must match it. A database of a different k is caught by
     // its own conversion job, which aborts on a k mismatch.
+    // nextflow_schema.json limits k to an odd number from 15 to 63, also when it
+    // comes from the databases. k is compiled in as -DKMER_K, so an invalid value
+    // would otherwise fail inside every job. An even k lets a sequence be its own
+    // reverse complement, and k must fit two 64-bit words.
     if (params.input_mode == 'kmc') {
         def kdir = params.kmc_dir ?: params.data_dir
         def fmt  = params.kmc_detected_format
@@ -570,45 +574,30 @@ workflow {
         exit 1, "ERROR: --kmer_size is required (an ODD number between 15 and 63, e.g. --kmer_size 51)."
     }
 
-    // Validate k up front. k is compiled in as -DKMER_K, so an invalid value
-    // would otherwise surface as a static_assert failure inside every SLURM job
-    // rather than here. k must be odd (an even k lets a sequence be its own
-    // reverse complement, making the canonical form ambiguous) and fit two
-    // 64-bit words.
-    def kmer_size = params.kmer_size as Integer
-    if (kmer_size % 2 == 0 || kmer_size < 15 || kmer_size > 63) {
-        exit 1, "ERROR: --kmer_size must be an ODD number between 15 and 63 (got ${params.kmer_size})"
-    }
-
-    // Validate the output-format options up front, so a bad combination fails at
-    // launch rather than in every MATRIX_MERGE job. Mirrors the C++ checks.
-    if (!(params.delimiter in ['tab', 'space', 'none']))
-        exit 1, "ERROR: --delimiter must be 'tab', 'space' or 'none' (got '${params.delimiter}'). 'bits' is now --encoding bits."
-    if (!(params.encoding in ['text', 'bits']))
-        exit 1, "ERROR: --encoding must be 'text' or 'bits' (got '${params.encoding}')."
+    // Validate the output-format combinations up front, so a bad combination
+    // fails at launch rather than in every MATRIX_MERGE job. Mirrors the C++ checks.
     if (params.encoding == 'bits' && params.keep_kmer_counts == 'y')
         exit 1, "ERROR: --encoding bits is presence/absence only; it cannot be combined with --keep_kmer_counts y."
     if (params.encoding == 'text' && params.delimiter == 'none' && params.keep_kmer_counts == 'y')
         exit 1, "ERROR: --delimiter none cannot be combined with --keep_kmer_counts y (multi-digit counts would be unparseable). Use --delimiter tab or space."
 
-    // Validate the publish mode. For 'link', fail here if output_dir and the
-    // work dir are on different filesystems: hard links cannot cross filesystems,
-    // so this check avoids a mid-run failure with a clearer error and fix.
-    if (!(params.kmer_count_publish_mode in ['link', 'copy', 'move']))
-        exit 1, "ERROR: --kmer_count_publish_mode must be 'link', 'copy' or 'move' (got '${params.kmer_count_publish_mode}')."
-    if (!(params.matrix_publish_mode in ['link', 'copy', 'move']))
-        exit 1, "ERROR: --matrix_publish_mode must be 'link', 'copy' or 'move' (got '${params.matrix_publish_mode}')."
+    // For 'link' publish mode, fail here if output_dir and the work dir are on
+    // different filesystems: hard links cannot cross filesystems, so this check
+    // avoids a mid-run failure with a clearer error and fix.
     if (params.kmer_count_publish_mode == 'link' || params.matrix_publish_mode == 'link') {
-        def outDev = null, workDev = null
+        def outDev = null
+        def workDev = null
         try {
             def devOf = { p ->
-                def f = new File(p.toString())
-                while (f != null && !f.exists()) f = f.parentFile   // nearest existing ancestor
-                f == null ? null : java.nio.file.Files.getAttribute(f.toPath(), 'unix:dev')
+                // The path itself, or its nearest existing ancestor.
+                def path = new File(p.toString()).absoluteFile.toPath()
+                def f    = (path.nameCount..0).collect { n -> n == 0 ? path.root : path.root.resolve(path.subpath(0, n)) }
+                                                .find { q -> java.nio.file.Files.exists(q) }
+                f == null ? null : java.nio.file.Files.getAttribute(f, 'unix:dev')
             }
-            outDev  = devOf(params.output_dir)
-            workDev = devOf(workflow.workDir)
-        } catch (Exception e) { /* cannot determine filesystems; let Nextflow surface any link error */ }
+            outDev  = devOf.call(params.output_dir)
+            workDev = devOf.call(workflow.workDir)
+        } catch (Exception _e) { /* cannot determine filesystems; let Nextflow surface any link error */ }
         if (outDev != null && workDev != null && outDev != workDev)
             exit 1, "ERROR: 'link' publish mode needs --output_dir and the work dir on the same filesystem, " +
                     "but they are on different ones (output_dir=${params.output_dir}, work=${workflow.workDir}). " +
@@ -635,16 +624,16 @@ workflow {
 
     paramSummary(accessions_file, data_dir)
 
-    def n_accessions = file(accessions_file).readLines().findAll { it.trim() }.size()
+    def n_accessions = file(accessions_file).readLines().findAll { l -> l.trim() }.size()
     writeManifest(accessions_file, data_dir, n_accessions)
 
     // -- Stage 1: one pack per accession, counted from reads or converted from a
     //    KMC database. Both processes emit the same (accession, pack) tuples. --
-    ch_accessions = Channel
+    ch_accessions = channel
         .fromPath(params.accessions_file)
         .splitText()
-        .map { it.trim() }
-        .filter { it }                  // skip blank lines
+        .map { l -> l.trim() }
+        .filter { l -> l }                  // skip blank lines
 
     // Build the bits_to_text converter into results/bin/ so the output
     // directory ships with the tool needed to read its bit-packed matrices.
@@ -655,9 +644,9 @@ workflow {
         // the check has passed.
         KMC_HEADERS(file(accessions_file), kmc_dir)
         KMC_HEADERS.out.notes
-            .splitText().map { it.trim() }.filter { it }
-            .subscribe { it.startsWith('WARNING:') ? log.warn(it - 'WARNING: ') : log.info(it - 'NOTE: ') }
-        ch_checked = ch_accessions.combine(KMC_HEADERS.out.table).map { acc, table -> acc }
+            .splitText().map { l -> l.trim() }.filter { l -> l }
+            .subscribe { l -> l.startsWith('WARNING:') ? log.warn(l - 'WARNING: ') : log.info(l - 'NOTE: ') }
+        ch_checked = ch_accessions.combine(KMC_HEADERS.out.table).map { acc, _table -> acc }
         KMC_TO_PACK(ch_checked, params.num_bins, kmc_dir)
         ch_packs = KMC_TO_PACK.out.accession_pack
         ch_stats = KMC_TO_PACK.out.stats
@@ -670,11 +659,11 @@ workflow {
     // One table with the metadata of every pack, written when Stage 1 is done,
     // with the rows in the order of the accessions file.
     def acc_order = [:]
-    file(accessions_file).readLines()*.trim().findAll { it }.eachWithIndex { a, i -> acc_order[a] = i }
+    file(accessions_file).readLines()*.trim().findAll { l -> l }.eachWithIndex { a, i -> acc_order[a] = i }
     ch_stats
         .collectFile(name: 'pack_stats.tsv', storeDir: output_dir, keepHeader: true,
                      sort: { f -> acc_order.get(f.name - ~/\.pack_stats\.tsv$/, Integer.MAX_VALUE) })
-        .subscribe { logPackSummary(it) }
+        .subscribe { f -> logPackSummary(f) }
 
     // Fan-in: wait for all accessions, then fire once per bin. Each finished
     // accession emits num_bins sentinel tuples (bin_idx, kmer_count_root).
@@ -688,7 +677,7 @@ workflow {
     def n_bins          = params.num_bins as Integer
 
     ch_bin_signals = ch_packs
-        .flatMap { accession, pack ->
+        .flatMap { _accession, _pack ->
             (0..<n_bins).collect { bin_idx ->
                 tuple(bin_idx, kmer_count_root)
             }
@@ -716,7 +705,7 @@ workflow {
     //    a pack is never compressed while it might still be read. See the module.
     if (params.compress_kbin_packs) {
         ch_gate = MATRIX_MERGE.out.matrix_file.collect().map { true }
-        ch_accs = ch_packs.map { acc, pack -> acc }
+        ch_accs = ch_packs.map { acc, _pack -> acc }
         COMPRESS_PACKS(ch_accs.combine(ch_gate), kmer_count_root)
     }
 }

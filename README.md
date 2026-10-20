@@ -14,6 +14,7 @@ A high-performance Nextflow pipeline for generating genome-wide k-mer matrices f
 - [Parameters](#parameters)
 - [Resuming a run](#resuming-a-run)
 - [Execution profiles](#execution-profiles)
+- [Running offline](#running-offline)
 - [Matrix formats](#matrix-formats)
 - [Utilities](#utilities)
 - [Algorithm](#algorithm)
@@ -62,7 +63,8 @@ K-mers composed entirely of `A` bases are valid and are retained. Only windows c
 
 | Component | Requirement |
 |---|---|
-| Nextflow | 24.04 or later, DSL2 |
+| Nextflow | 25.10 or later, DSL2 |
+| nf-schema plugin | Nextflow downloads it on the first run. For nodes with no internet access, see [Running offline](#running-offline). |
 | Container engine: Singularity, Apptainer, Docker or Podman | Optional. Supplies GCC 12, zlib-ng and pigz. |
 | SLURM | Required for the `slurm` profile |
 | GCC 12 or later (C++17), zlib development files, pigz | Required when no container profile is used |
@@ -214,9 +216,11 @@ Each pack also records its metadata: the accession, the input mode (`reads` or `
 | `estimated_kmer_coverage` | The count that has the most distinct k-mers, after the low-count peak of sequencing errors. K-mers at `count_limit` are not used. `NA` if there is no such peak. |
 | `kmers_in_smallest_bin`, `kmers_in_largest_bin` | The number of k-mers in the smallest and the largest bin (bin balance) |
 
-`run_manifest.txt` records how the results directory was made: the parameters, the command line, the profile with its executor and container engine, the container image, and the CPUs and memory each stage requested. A setting that the profile does not use shows `n/a`, for example the time limits with the `local` executor. The manifest also records a `code_checksum`. The checksum is one MD5 over `main.nf`, `nextflow.config`, `conf/`, `modules/` and the C++ sources, so two runs used the same code only if their checksums are the same. The manifest is written at launch with `status = running`, and a completion section (status, duration, CPU hours, task counts and, on failure, the error) is added when the run ends.
+`run_manifest.txt` records how the results directory was made: the parameters, the command line, the profile with its executor and container engine, the container image, and the CPUs and memory each stage requested. A setting that the profile does not use shows `n/a`, for example the time limits with the `local` executor. The manifest also records a `code_checksum`. The checksum is one MD5 over `main.nf`, `nextflow.config`, `nextflow_schema.json`, `conf/`, `modules/` and the C++ sources, so two runs used the same code only if their checksums are the same. The manifest is written at launch with `status = running`, and a completion section (status, duration, CPU hours, task counts and, on failure, the error) is added when the run ends.
 
 ## Parameters
+
+All parameters are checked at launch against `nextflow_schema.json`. An unknown parameter, for example a typo, or an invalid value stops the run before any job starts, and the error lists each invalid value.
 
 | Parameter | Default | Description |
 |---|---:|---|
@@ -373,6 +377,50 @@ Resources per job:
 
 Every request is clamped to `--max_cpus`, `--max_memory` and `--max_time`.
 
+## Running offline
+
+Nextflow downloads the nf-schema plugin on the first run. If your compute nodes have no internet access, install the plugin before the run:
+
+1. On a node that has internet access (for example, a login node), install the plugin once:
+
+   ```bash
+   nextflow plugin install nf-schema@2.7.3
+   ```
+
+   Nextflow puts the plugin in `$NXF_HOME/plugins`. The default `NXF_HOME` is `$HOME/.nextflow`.
+
+2. Before `nextflow run` (for example, in your SLURM script), set:
+
+   ```bash
+   export NXF_OFFLINE=true
+   ```
+
+   Without this setting, Nextflow tries to contact the plugin registry, and the run stops with `Network is unreachable` in `.nextflow.log`.
+
+Some clusters give the compute nodes a different home directory from the login node. Then the compute nodes do not find the plugin, and the run stops with `Cannot find the manifest path` or `Plugin with id nf-schema not found`. To prevent this, use one of these methods:
+
+- Copy `.nextflow` from the login-node home to the compute-node home.
+- Set `NXF_HOME` to the same shared directory for the install and for the run.
+
+### Shaheen III (KAUST)
+
+On Shaheen III, the home directory is `/home/$USER` on the login nodes and `/scratch/$USER` on the compute nodes. On a login node:
+
+```bash
+# Download the plugin to /home/$USER/.nextflow
+nextflow plugin install nf-schema@2.7.3
+
+# Copy it to the compute-node home (remove an old copy first)
+rm -rf /scratch/$USER/.nextflow
+cp -r /home/$USER/.nextflow /scratch/$USER/.nextflow
+```
+
+In your SLURM script, before `nextflow run`:
+
+```bash
+export NXF_OFFLINE=true
+```
+
 ## Matrix formats and utilities
 
 Convert between text and bit-packed representations with `bits_to_text`:
@@ -425,6 +473,7 @@ For large cohorts:
 .
 ├── main.nf
 ├── nextflow.config
+├── nextflow_schema.json    # Parameter rules and descriptions
 ├── conf/
 │   ├── base.config
 │   ├── local.config
