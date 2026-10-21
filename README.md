@@ -30,6 +30,11 @@ The output contains one row per distinct k-mer and one column per accession. It 
 
 ### Pipeline stages
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/metro_map_dark.svg">
+  <img alt="Metro map of the pipeline: reads or KMC databases form the Stage 1 packs, MATRIX_MERGE builds the matrix in Stage 2, and COMPRESS_PACKS is optional" src="docs/images/metro_map_light.svg">
+</picture>
+
 1. **Stage 1 builds one pack per accession** from one of two inputs:
    - **KMER_COUNT** (reads mode, the default) streams the accession's paired read files (R1 and R2; FASTQ or FASTA, plain or gzip-compressed), counts canonical k-mers, and writes `<accession>.kbin`.
    - **KMC_TO_PACK** (`--input_mode kmc`) reads the accession's KMC database and writes the same `<accession>.kbin`.
@@ -474,6 +479,9 @@ For large cohorts:
 ├── main.nf
 ├── nextflow.config
 ├── nextflow_schema.json    # Parameter rules and descriptions
+├── docs/
+│   ├── BENCHMARKS.md
+│   └── images/             # Metro map (metro_map.mmd is the nf-metro source)
 ├── conf/
 │   ├── base.config
 │   ├── local.config

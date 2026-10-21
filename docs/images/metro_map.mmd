@@ -1,0 +1,38 @@
+%%metro style: nfcore
+%%metro file: fastq_in | FASTQ
+%%metro file: kmc_in | KMC
+%%metro file: matrix_out | MATRIX
+%%metro file: packs_gz | GZ
+%%metro line: reads | Input: reads (--input_mode reads) | #2db572
+%%metro line: kmc | Input: KMC databases (--input_mode kmc) | #0570b0
+%%metro line: compress | Optional: compress packs (--compress_kbin_packs) | #f5c542 | dashed
+%%metro legend: bl
+
+graph LR
+    subgraph stage1 [Stage 1: k-mer packs]
+        %%metro exit: right | reads, kmc
+        fastq_in[ ]
+        kmc_in[ ]
+        kmer_count[KMER_COUNT]
+        kmc_headers[KMC_HEADERS]
+        kmc_to_pack[KMC_TO_PACK]
+
+        fastq_in -->|reads| kmer_count
+        kmc_in -->|kmc| kmc_headers
+        kmc_headers -->|kmc| kmc_to_pack
+    end
+
+    subgraph stage2 [Stage 2: k-mer matrix]
+        %%metro entry: left | reads, kmc
+        matrix_merge[MATRIX_MERGE]
+        matrix_out[ ]
+        compress_packs[COMPRESS_PACKS]
+        packs_gz[ ]
+
+        matrix_merge -->|reads,kmc| matrix_out
+        matrix_merge -->|compress| compress_packs
+        compress_packs -->|compress| packs_gz
+    end
+
+    kmer_count -->|reads| matrix_merge
+    kmc_to_pack -->|kmc| matrix_merge
