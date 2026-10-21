@@ -1,6 +1,8 @@
-# kmer-GWAS
+# kmer-gwas-cpp
 
-A high-performance Nextflow pipeline for generating genome-wide k-mer matrices for genome-wide association studies. It is designed for large cohorts and supports SLURM, Singularity/Apptainer, paired-end FASTQ/FASTA input or pre-built KMC databases, presence/absence or raw-count matrices, and bit-packed output.
+**k-mer matrices for genome-wide association studies, from reads or KMC databases, at cohort scale.**
+
+A high-performance Nextflow pipeline that builds the k-mer matrix for a GWAS: one row per k-mer, one column per accession. It does not run the association test itself. It supports SLURM, Singularity/Apptainer, Docker and Podman, paired-end FASTQ/FASTA input or pre-built KMC databases, presence/absence or count matrices, and bit-packed output.
 
 > **Status:** Benchmark values refer to the rice dataset described in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md). Performance is hardware- and dataset-dependent.
 
