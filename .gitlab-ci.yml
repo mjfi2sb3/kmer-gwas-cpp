@@ -72,14 +72,16 @@ create-release:
     tag_name: "$CI_COMMIT_TAG"
     name: "Release $CI_COMMIT_TAG"
     description: release_notes.md
+    # The tools are attached to the GitHub release by github-release, which is
+    # public; the GitLab job artifacts need a login.
     assets:
       links:
         - name: "kbin_dump (x86-64 Linux, static)"
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/kbin_dump?job=build-tools"
-          link_type: other
+          url: "https://github.com/mjfi2sb3/kmer-gwas-cpp/releases/download/${CI_COMMIT_TAG}/kbin_dump"
+          link_type: package
         - name: "bits_to_text (x86-64 Linux, static)"
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/bits_to_text?job=build-tools"
-          link_type: other
+          url: "https://github.com/mjfi2sb3/kmer-gwas-cpp/releases/download/${CI_COMMIT_TAG}/bits_to_text"
+          link_type: package
 
 # Create the matching GitHub release, with the same notes and the two static
 # tools as files. GITHUB_TOKEN needs write access to the repository contents.
